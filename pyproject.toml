@@ -8,6 +8,7 @@ dependencies = ["e2b-code-interpreter", "python-dotenv"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0.0", "mypy>=1.0.0", "ruff>=0.1.0"]
+gcs = ["google-cloud-storage>=3.6.0"]
 
 [build-system]
 requires = ["hatchling"]
