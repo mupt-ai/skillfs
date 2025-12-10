@@ -33,3 +33,7 @@ htmlcov/
 # Environment
 .env
 .python-version
+
+# uv
+.uv/
+uv.lock
