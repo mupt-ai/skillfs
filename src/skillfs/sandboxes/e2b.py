@@ -95,8 +95,8 @@ class E2BSandbox(SandboxConnection):
         if not self.is_alive or not self._sandbox:
             raise RuntimeError("Sandbox is not active. Call create() first.")
 
-        if language != "python" and language != "bash":
-            raise ValueError(f"E2B only supports Python and Bash, got: {language}")
+        if language != "python":
+            raise ValueError(f"E2B only supports Python, got: {language}")
 
         # Execute code in sandbox with timeout from config
         execution = self._sandbox.run_code(code, language=language, timeout=self.config.timeout)
