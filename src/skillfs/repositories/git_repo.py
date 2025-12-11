@@ -65,27 +65,39 @@ class GitRepo:
         return shlex.quote(path)
 
     def init_empty(self) -> None:
-        """Initialize a new empty Git repository.
+        """Initialize the repository by cloning a template with no remote.
 
-        Creates the repository directory, initializes git, sets default
-        user config, and creates a default .gitignore file.
+        Clones https://github.com/mupt-ai/agent-runtime-template.git into the repo root, 
+        removes the remote, and sets local user config. Overwrites root directory if not empty.
 
         Raises:
-            RuntimeError: If git init fails.
+            RuntimeError: If the Git operations fail.
         """
-        logger.info(f"Initializing new Git repository at {self.root}")
+        logger.info(f"Cloning agent-runtime-template repo into {self.root}")
 
-        # Create directory
+        # Create root directory (if needed)
         result = self.sandbox.run_command(f"mkdir -p {self._quote(self.root)}")
         if result.exit_code != 0:
             raise RuntimeError(f"Failed to create directory {self.root}: {result.error}")
 
-        # Initialize git repo
+        # Clone template repo into root
+        result = self.sandbox.run_command(
+            f"git clone --depth=1 https://github.com/mupt-ai/agent-runtime-template.git {self._quote(self.root)}"
+        )
+        if result.exit_code != 0:
+            raise RuntimeError(f"Failed to clone template repo: {result.error}")
+
+        # Remove .git dir within the repo and re-init to prevent remote linkage/history retention
+        result = self._run("rm -rf .git")
+        if result.exit_code != 0:
+            raise RuntimeError(f"Failed to remove .git after clone: {result.error}")
+
+        # Re-initialize as a new repo
         result = self._run("git init .")
         if result.exit_code != 0:
-            raise RuntimeError(f"Failed to initialize git repository: {result.error}")
+            raise RuntimeError(f"Failed to reinitialize git repository: {result.error}")
 
-        # Set default user config (local to this repo)
+        # Set default user config (local to this repo, as before)
         result = self._run(f'git config user.name "{DEFAULT_GIT_USER_NAME}"')
         if result.exit_code != 0:
             raise RuntimeError(f"Failed to set git user.name: {result.error}")
@@ -94,27 +106,7 @@ class GitRepo:
         if result.exit_code != 0:
             raise RuntimeError(f"Failed to set git user.email: {result.error}")
 
-        # Create default .gitignore
-        gitignore_path = f"{self.root}/.gitignore"
-        gitignore_q = self._quote(gitignore_path)
-        write_cmd = f"cat > {gitignore_q} << 'SKILLFS_EOF'\n{DEFAULT_GITIGNORE}SKILLFS_EOF"
-        result = self.sandbox.run_command(write_cmd)
-        if result.exit_code != 0:
-            raise RuntimeError(f"Failed to create .gitignore: {result.error}")
-
-        # Create SkillFS directory structure and placeholder files so empty dirs are tracked
-        for dir_name in ["skills", "servers", "workspace"]:
-            dir_q = self._quote(dir_name)
-            result = self._run(f"mkdir -p {dir_q}")
-            if result.exit_code != 0:
-                raise RuntimeError(f"Failed to create {dir_name} directory: {result.error}")
-            keep_file = f"{dir_name}/.gitkeep"
-            keep_q = self._quote(keep_file)
-            touch_res = self._run(f"touch {keep_q}")
-            if touch_res.exit_code != 0:
-                raise RuntimeError(f"Failed to create placeholder in {dir_name}: {touch_res.error}")
-
-        logger.info("Git repository initialized successfully")
+        logger.info("Repository initialized from template with no remote.")
 
     def restore_from_bundle(
         self, bundle_path: str, checkout_dir: Optional[str] = None

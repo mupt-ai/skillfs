@@ -1,7 +1,8 @@
 """Agent class for managing persistent agent state."""
 
 import logging
-from typing import Optional
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 from skillfs.constants import DEFAULT_REPO_ROOT
 from skillfs.agents.persistence import load_agent_state, save_agent_state
@@ -53,6 +54,7 @@ class Agent:
         sandbox: SandboxConnection,
         store: BundleStore,
         repo_root: str = DEFAULT_REPO_ROOT,
+        mcp_servers: Optional[Dict[str, Dict[str, Any]]] = None,
     ):
         """Initialize agent instance.
 
@@ -61,21 +63,25 @@ class Agent:
             sandbox: Active sandbox connection where agent operates.
             store: Storage backend for persisting agent state.
             repo_root: Path inside sandbox for the Git repository.
+            mcp_servers: Optional MCP server configurations to setup during load.
+                        Format: {"server-name": {"command": "...", "args": [...], "env": {...}}}
         """
         self.agent_id = agent_id
         self.sandbox = sandbox
         self.store = store
         self.repo_root = repo_root
+        self.mcp_servers = mcp_servers or {}
         self.git_repo: Optional[GitRepo] = None
         self._is_loaded = False
 
         logger.info(f"Created agent instance: {agent_id}")
 
-    def load(self) -> None:
+    async def load(self) -> None:
         """Load agent state from storage into sandbox.
 
         Downloads bundle from storage if it exists and restores the Git repository.
         If no bundle exists, initializes a fresh repository with SkillFS structure.
+        If MCP servers are configured, sets them up after loading.
 
         After calling this method, the agent's Git repository is accessible
         via `self.git_repo`.
@@ -97,6 +103,10 @@ class Agent:
             bundle_store=self.store,
             repo_root=self.repo_root,
         )
+
+        # Setup MCP servers if configured
+        if self.mcp_servers:
+            await self.setup_mcp_servers(self.mcp_servers)
 
         self._is_loaded = True
         logger.info(f"Agent {self.agent_id} loaded successfully")
@@ -129,6 +139,73 @@ class Agent:
         )
 
         logger.info(f"Agent {self.agent_id} saved successfully")
+
+    async def setup_mcp_servers(
+        self, servers_config: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Path]:
+        """Setup MCP servers and generate tool files in the sandbox.
+
+        This method fetches tools from each configured MCP server and generates
+        Python wrapper files in the src/servers/<server-name>/ directory within
+        the agent's repository.
+
+        Args:
+            servers_config: Dictionary mapping server names to their configurations.
+                           Each config should include 'command', 'args', and optionally 'env'.
+
+        Returns:
+            Dictionary mapping server names to their generated directories.
+
+        Raises:
+            RuntimeError: If git repo is not initialized or if MCP setup fails.
+
+        Example:
+            >>> servers = {
+            ...     "filesystem": {
+            ...         "command": "npx",
+            ...         "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+            ...     }
+            ... }
+            >>> await agent.setup_mcp_servers(servers)
+        """
+        if self.git_repo is None:
+            raise RuntimeError(
+                f"Agent {self.agent_id} repository not initialized. Call load() first."
+            )
+
+        logger.info(f"Setting up {len(servers_config)} MCP servers for agent {self.agent_id}")
+
+        from skillfs.mcp import MCPServerManager
+        from tempfile import TemporaryDirectory
+        import asyncio
+
+        # Create a temporary directory on the host machine for generation
+        with TemporaryDirectory() as tmpdir:
+            tmp_servers_dir = Path(tmpdir) / "servers"
+            tmp_servers_dir.mkdir()
+
+            # Setup MCP servers and generate files locally
+            manager = MCPServerManager(tmp_servers_dir)
+            server_dirs = await manager.setup_multiple_servers(servers_config)
+
+            # Upload generated files to sandbox
+            sandbox_servers_base = f"{self.repo_root}/src/servers"
+
+            # Upload each server directory to sandbox in parallel
+            results = {}
+            upload_tasks = []
+
+            for server_name, local_dir in server_dirs.items():
+                remote_dir = f"{sandbox_servers_base}/{server_name}"
+                logger.info(f"Uploading {server_name} tools to {remote_dir}")
+                upload_tasks.append(self.sandbox.upload_directory(local_dir, remote_dir))
+                results[server_name] = Path(remote_dir)
+
+            # Execute all uploads in parallel
+            await asyncio.gather(*upload_tasks)
+
+            logger.info(f"Successfully setup {len(results)} MCP servers in sandbox")
+            return results
 
     @property
     def is_loaded(self) -> bool:
