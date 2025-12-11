@@ -1,12 +1,13 @@
 """Agent class for managing persistent agent state."""
 
 import logging
-from typing import Optional
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 from skillfs.constants import DEFAULT_REPO_ROOT
 from skillfs.agents.persistence import load_agent_state, save_agent_state
 from skillfs.repositories.git_repo import GitRepo
-from skillfs.sandboxes.base import SandboxConnection
+from skillfs.sandboxes.base import ExecutionResult, SandboxConnection
 from skillfs.storage.base import BundleStore
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,8 @@ class Agent:
         sandbox: SandboxConnection,
         store: BundleStore,
         repo_root: str = DEFAULT_REPO_ROOT,
+        mcp_servers: Optional[Dict[str, Dict[str, Any]]] = None,
+        generate_mcp_tools: bool = False,
     ):
         """Initialize agent instance.
 
@@ -61,21 +64,28 @@ class Agent:
             sandbox: Active sandbox connection where agent operates.
             store: Storage backend for persisting agent state.
             repo_root: Path inside sandbox for the Git repository.
+            mcp_servers: Optional MCP server configurations.
+                        Format: {"server-name": {"command": "...", "args": [...], "env": {...}}}
+            generate_mcp_tools: If True, generate MCP tool wrappers during load.
+                               If False, MCP servers are ignored.
         """
         self.agent_id = agent_id
         self.sandbox = sandbox
         self.store = store
         self.repo_root = repo_root
+        self.mcp_servers = mcp_servers or {}
+        self.generate_mcp_tools = generate_mcp_tools
         self.git_repo: Optional[GitRepo] = None
         self._is_loaded = False
 
         logger.info(f"Created agent instance: {agent_id}")
 
-    def load(self) -> None:
+    async def load(self) -> None:
         """Load agent state from storage into sandbox.
 
         Downloads bundle from storage if it exists and restores the Git repository.
         If no bundle exists, initializes a fresh repository with SkillFS structure.
+        If MCP servers are configured, sets them up after loading.
 
         After calling this method, the agent's Git repository is accessible
         via `self.git_repo`.
@@ -97,6 +107,10 @@ class Agent:
             bundle_store=self.store,
             repo_root=self.repo_root,
         )
+
+        # Setup MCP servers if flag is enabled
+        if self.generate_mcp_tools and self.mcp_servers:
+            await self.setup_mcp_servers(self.mcp_servers)
 
         self._is_loaded = True
         logger.info(f"Agent {self.agent_id} loaded successfully")
@@ -129,6 +143,96 @@ class Agent:
         )
 
         logger.info(f"Agent {self.agent_id} saved successfully")
+
+    async def setup_mcp_servers(
+        self, servers_config: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Path]:
+        """Setup MCP servers and generate tool files in the sandbox.
+
+        This method fetches tools from each configured MCP server and generates
+        Python wrapper files in the src/servers/<server-name>/ directory within
+        the agent's repository.
+
+        Args:
+            servers_config: Dictionary mapping server names to their configurations.
+                           Each config should include 'command', 'args', and optionally 'env'.
+
+        Returns:
+            Dictionary mapping server names to their generated directories.
+
+        Raises:
+            RuntimeError: If git repo is not initialized or if MCP setup fails.
+
+        Example:
+            >>> servers = {
+            ...     "filesystem": {
+            ...         "command": "npx",
+            ...         "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+            ...     }
+            ... }
+            >>> await agent.setup_mcp_servers(servers)
+        """
+        if self.git_repo is None:
+            raise RuntimeError(
+                f"Agent {self.agent_id} repository not initialized. Call load() first."
+            )
+
+        import asyncio
+        from tempfile import TemporaryDirectory
+
+        from skillfs.mcp import MCPServerManager
+
+        logger.info(f"Setting up {len(servers_config)} MCP servers for agent {self.agent_id}")
+
+        sandbox_servers_base = f"{self.repo_root}/src/servers"
+
+        # Create a temporary directory on the host machine for generation
+        with TemporaryDirectory() as tmpdir:
+            tmp_servers_dir = Path(tmpdir) / "servers"
+            tmp_servers_dir.mkdir()
+
+            # Setup MCP servers and generate files locally
+            manager = MCPServerManager(tmp_servers_dir)
+            server_dirs = await manager.setup_multiple_servers(servers_config)
+
+            # Upload each server directory to sandbox in parallel
+            upload_tasks = []
+            results = {}
+
+            for server_name, local_dir in server_dirs.items():
+                remote_dir = f"{sandbox_servers_base}/{server_name}"
+                logger.info(f"Uploading {server_name} tools to {remote_dir}")
+                upload_tasks.append(self.sandbox.upload_directory(local_dir, remote_dir))
+                results[server_name] = Path(remote_dir)
+
+            # Execute all uploads in parallel
+            await asyncio.gather(*upload_tasks)
+
+            logger.info(f"Successfully setup {len(results)} MCP servers in sandbox")
+            return results
+
+    def run_command(
+        self, command: str, cwd: Optional[str] = None
+    ) -> ExecutionResult:
+        """Run a shell command in the sandbox.
+
+        Args:
+            command: Shell command to execute.
+            cwd: Optional working directory for the command.
+
+        Returns:
+            ExecutionResult with stdout, stderr, and exit code.
+
+        Raises:
+            RuntimeError: If agent is not loaded.
+        """
+        if not self._is_loaded:
+            raise RuntimeError(
+                f"Agent {self.agent_id} is not loaded. Call load() first."
+            )
+        result = self.sandbox.run_command(command, cwd=cwd)
+        logger.info(f"Executed command: {command} (exit code: {result.exit_code})")
+        return result
 
     @property
     def is_loaded(self) -> bool:

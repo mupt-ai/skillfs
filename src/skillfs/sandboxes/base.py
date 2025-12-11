@@ -1,9 +1,14 @@
 """Base abstractions for sandbox environments."""
 
+import asyncio
+import logging
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Optional, Dict, List
 from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -132,6 +137,55 @@ class SandboxConnection(ABC):
     def close(self) -> None:
         """Terminate and cleanup the sandbox instance."""
         pass
+
+    async def upload_directory(self, local_dir: Path, remote_dir: str) -> None:
+        """Upload a directory recursively to the sandbox with parallel file uploads.
+
+        Args:
+            local_dir: Local directory path to upload
+            remote_dir: Remote path in sandbox where directory should be uploaded
+
+        Raises:
+            RuntimeError: If directory creation or file upload fails
+        """
+        # Create the remote directory
+        result = self.run_command(f"mkdir -p {remote_dir}")
+        if result.exit_code != 0:
+            raise RuntimeError(f"Failed to create remote directory {remote_dir}: {result.error}")
+
+        # Collect all files to upload
+        upload_tasks = []
+        for root, _, files in os.walk(local_dir):
+            for file in files:
+                local_file = Path(root) / file
+                # Calculate relative path from local_dir
+                rel_path = local_file.relative_to(local_dir)
+                remote_file = f"{remote_dir}/{rel_path}"
+
+                upload_tasks.append((local_file, remote_file))
+
+        # Create all necessary parent directories first
+        parent_dirs = set()
+        for _, remote_file in upload_tasks:
+            remote_parent = str(Path(remote_file).parent)
+            if remote_parent != remote_dir:
+                parent_dirs.add(remote_parent)
+
+        # Create parent directories
+        for parent_dir in parent_dirs:
+            result = self.run_command(f"mkdir -p {parent_dir}")
+            if result.exit_code != 0:
+                logger.warning(f"Failed to create {parent_dir}: {result.error}")
+
+        # Upload all files in parallel
+        async def upload_file_async(local_file: Path, remote_file: str) -> None:
+            await asyncio.to_thread(self.upload_file, local_file, remote_file)
+            logger.debug(f"Uploaded {local_file} to {remote_file}")
+
+        await asyncio.gather(*[
+            upload_file_async(local_file, remote_file)
+            for local_file, remote_file in upload_tasks
+        ])
 
     @property
     def is_alive(self) -> bool:

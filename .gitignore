@@ -11,6 +11,7 @@ dist/
 
 # Virtual environments
 .venv/
+.conductor/
 venv/
 env/
 
@@ -33,3 +34,7 @@ htmlcov/
 # Environment
 .env
 .python-version
+
+# uv
+.uv/
+uv.lock
