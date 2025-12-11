@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 from skillfs.constants import DEFAULT_REPO_ROOT
 from skillfs.agents.persistence import load_agent_state, save_agent_state
 from skillfs.repositories.git_repo import GitRepo
-from skillfs.sandboxes.base import SandboxConnection
+from skillfs.sandboxes.base import ExecutionResult, SandboxConnection
 from skillfs.storage.base import BundleStore
 
 logger = logging.getLogger(__name__)
@@ -55,6 +55,7 @@ class Agent:
         store: BundleStore,
         repo_root: str = DEFAULT_REPO_ROOT,
         mcp_servers: Optional[Dict[str, Dict[str, Any]]] = None,
+        generate_mcp_tools: bool = False,
     ):
         """Initialize agent instance.
 
@@ -63,14 +64,17 @@ class Agent:
             sandbox: Active sandbox connection where agent operates.
             store: Storage backend for persisting agent state.
             repo_root: Path inside sandbox for the Git repository.
-            mcp_servers: Optional MCP server configurations to setup during load.
+            mcp_servers: Optional MCP server configurations.
                         Format: {"server-name": {"command": "...", "args": [...], "env": {...}}}
+            generate_mcp_tools: If True, generate MCP tool wrappers during load.
+                               If False, MCP servers are ignored.
         """
         self.agent_id = agent_id
         self.sandbox = sandbox
         self.store = store
         self.repo_root = repo_root
         self.mcp_servers = mcp_servers or {}
+        self.generate_mcp_tools = generate_mcp_tools
         self.git_repo: Optional[GitRepo] = None
         self._is_loaded = False
 
@@ -104,8 +108,8 @@ class Agent:
             repo_root=self.repo_root,
         )
 
-        # Setup MCP servers if configured
-        if self.mcp_servers:
+        # Setup MCP servers if flag is enabled
+        if self.generate_mcp_tools and self.mcp_servers:
             await self.setup_mcp_servers(self.mcp_servers)
 
         self._is_loaded = True
@@ -173,11 +177,14 @@ class Agent:
                 f"Agent {self.agent_id} repository not initialized. Call load() first."
             )
 
-        logger.info(f"Setting up {len(servers_config)} MCP servers for agent {self.agent_id}")
+        import asyncio
+        from tempfile import TemporaryDirectory
 
         from skillfs.mcp import MCPServerManager
-        from tempfile import TemporaryDirectory
-        import asyncio
+
+        logger.info(f"Setting up {len(servers_config)} MCP servers for agent {self.agent_id}")
+
+        sandbox_servers_base = f"{self.repo_root}/src/servers"
 
         # Create a temporary directory on the host machine for generation
         with TemporaryDirectory() as tmpdir:
@@ -188,12 +195,9 @@ class Agent:
             manager = MCPServerManager(tmp_servers_dir)
             server_dirs = await manager.setup_multiple_servers(servers_config)
 
-            # Upload generated files to sandbox
-            sandbox_servers_base = f"{self.repo_root}/src/servers"
-
             # Upload each server directory to sandbox in parallel
-            results = {}
             upload_tasks = []
+            results = {}
 
             for server_name, local_dir in server_dirs.items():
                 remote_dir = f"{sandbox_servers_base}/{server_name}"
@@ -206,6 +210,29 @@ class Agent:
 
             logger.info(f"Successfully setup {len(results)} MCP servers in sandbox")
             return results
+
+    def run_command(
+        self, command: str, cwd: Optional[str] = None
+    ) -> ExecutionResult:
+        """Run a shell command in the sandbox.
+
+        Args:
+            command: Shell command to execute.
+            cwd: Optional working directory for the command.
+
+        Returns:
+            ExecutionResult with stdout, stderr, and exit code.
+
+        Raises:
+            RuntimeError: If agent is not loaded.
+        """
+        if not self._is_loaded:
+            raise RuntimeError(
+                f"Agent {self.agent_id} is not loaded. Call load() first."
+            )
+        result = self.sandbox.run_command(command, cwd=cwd)
+        logger.info(f"Executed command: {command} (exit code: {result.exit_code})")
+        return result
 
     @property
     def is_loaded(self) -> bool:

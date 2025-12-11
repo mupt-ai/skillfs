@@ -138,6 +138,15 @@ class GitRepo:
                 f"Failed to restore repository from bundle: {result.error}\n{result.logs}"
             )
 
+        # Set git user config (needed for commits in restored repo)
+        result = self._run(f'git config user.name "{DEFAULT_GIT_USER_NAME}"')
+        if result.exit_code != 0:
+            raise RuntimeError(f"Failed to set git user.name: {result.error}")
+
+        result = self._run(f'git config user.email "{DEFAULT_GIT_USER_EMAIL}"')
+        if result.exit_code != 0:
+            raise RuntimeError(f"Failed to set git user.email: {result.error}")
+
         logger.info("Git repository restored successfully")
 
     def status(self) -> str:

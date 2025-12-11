@@ -190,17 +190,37 @@ class E2BSandbox(SandboxConnection):
             raise RuntimeError("Sandbox is not active. Call create() first.")
 
         # Execute command using E2B's commands.run API
-        result = self._sandbox.commands.run(
-            cmd=command,
-            cwd=cwd,
-            timeout=self.config.timeout,
-        )
+        # E2B raises CommandExitException for non-zero exit codes, so we catch it
+        try:
+            result = self._sandbox.commands.run(
+                cmd=command,
+                cwd=cwd,
+                timeout=self.config.timeout,
+            )
+            return ExecutionResult(
+                logs=result.stdout,
+                error=result.stderr if result.stderr else None,
+                exit_code=result.exit_code,
+            )
+        except Exception as e:
+            # Handle CommandExitException and other errors
+            # Extract stdout, stderr, and exit code if available
+            error_msg = str(e)
+            exit_code = 1
 
-        return ExecutionResult(
-            logs=result.stdout,
-            error=result.stderr if result.stderr else None,
-            exit_code=result.exit_code,
-        )
+            # Try to parse the error message for details
+            if hasattr(e, 'exit_code'):
+                exit_code = e.exit_code
+
+            # Extract stdout and stderr if available
+            stdout = getattr(e, 'stdout', '')
+            stderr = getattr(e, 'stderr', error_msg)
+
+            return ExecutionResult(
+                logs=stdout,
+                error=stderr,
+                exit_code=exit_code,
+            )
 
     def close(self) -> None:
         """Terminate and cleanup the E2B sandbox instance."""

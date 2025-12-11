@@ -1,5 +1,4 @@
 from typing import Any, List
-from textwrap import dedent, indent
 
 
 class MCPToolWrapperGenerator:
@@ -64,18 +63,20 @@ class MCPToolWrapperGenerator:
             arg_props: List of argument property names
 
         Returns:
-            Code string for building the arguments dictionary
+            Code string for building the arguments dictionary (with proper indentation for insertion)
         """
         if not arg_props:
             return "arguments = {}"
 
-        arguments_dict = "{\n" + "".join([
-            f'                "{prop}": {prop},\n'
+        # Generate argument items with proper indentation (will be at 12 spaces when inserted)
+        arg_items = "\n".join([
+            f'                "{prop}": {prop},'
             for prop in arg_props
-        ]) + "            }"
+        ])
 
-        return f"""\
-            arguments = {arguments_dict}
+        return f"""arguments = {{
+{arg_items}
+            }}
             # Remove None values
             arguments = {{k: v for k, v in arguments.items() if v is not None}}"""
 
@@ -93,26 +94,29 @@ class MCPToolWrapperGenerator:
         description = tool.description if hasattr(tool, 'description') and tool.description else ""
         arguments_section = self._generate_arguments_section(arg_props)
 
-        return dedent(f'''\
-            async def {tool.name}({params_str}) -> Any:
-                """
-                {description}
-                """
-                server_cfg = config["mcpServers"]["{self.server_name}"]
-                params = StdioServerParameters(
-                    command=server_cfg["command"],
-                    args=server_cfg["args"],
-                    env=None,
-                )
-                async with stdio_client(params) as (read, write):
-                    async with ClientSession(read, write) as session:
-                        await session.initialize()
-                        {indent(arguments_section, "        ").strip()}
-                        result = await session.call_tool(
-                            "{tool.name}",
-                            arguments=arguments,
-                        )
-                        return result''')
+        # Build the function with proper indentation
+        # Note: arguments_section should not be indented here since it has its own indentation
+        func_body = f'''async def {tool.name}({params_str}) -> Any:
+    """
+    {description}
+    """
+    server_cfg = config["mcpServers"]["{self.server_name}"]
+    params = StdioServerParameters(
+        command=server_cfg["command"],
+        args=server_cfg["args"],
+        env=None,
+    )
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            {arguments_section}
+            result = await session.call_tool(
+                "{tool.name}",
+                arguments=arguments,
+            )
+            return result'''
+
+        return func_body
 
     def generate_multiple_wrappers(self, tools: List[Any]) -> List[str]:
         """
