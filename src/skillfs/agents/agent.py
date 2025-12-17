@@ -12,7 +12,6 @@ from skillfs.storage.base import BundleStore
 
 logger = logging.getLogger(__name__)
 
-
 class Agent:
     """High-level interface for managing a persistent agent.
 

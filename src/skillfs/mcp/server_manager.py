@@ -1,6 +1,5 @@
 """Manager for MCP server tool generation and file creation."""
 
-import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -9,12 +8,19 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from skillfs.mcp.generate_tool_wrapper import MCPToolWrapperGenerator
+from skillfs.mcp.connection_manager import generate_connection_manager_code
 
 logger = logging.getLogger(__name__)
 
 
 class MCPServerManager:
-    """Manages MCP server definitions and generates tool wrapper files."""
+    """Manages MCP server definitions and generates tool wrapper files.
+
+    Generated files use a shared connection manager pattern where:
+    1. Each server package has a single MCPConnectionManager instance
+    2. All tool functions use the shared session from the connection manager
+    3. Users must call connect() before using tools and disconnect() when done
+    """
 
     def __init__(self, servers_dir: Path):
         """
@@ -70,27 +76,47 @@ class MCPServerManager:
 
         return tools
 
+    def _normalize_server_name(self, server_name: str) -> str:
+        """Normalize server name to be a valid Python package name.
+
+        Replaces hyphens with underscores so the generated directory
+        can be imported as a Python module.
+
+        Args:
+            server_name: Original server name (may contain hyphens)
+
+        Returns:
+            Normalized name safe for Python imports
+        """
+        return server_name.replace("-", "_")
+
     def generate_server_files(
         self,
         server_name: str,
         tools: List[Any],
-        config: Optional[Dict[str, Any]] = None
+        server_config: Dict[str, Any]
     ) -> Path:
         """
-        Generate a directory with individual files for each MCP server tool.
+        Generate a directory with tool wrapper files for an MCP server.
+
+        The generated package structure:
+        - __init__.py: Exports all tools, connect(), disconnect(), and get_connection_manager()
+        - Each tool gets its own file that uses the shared connection manager
 
         Args:
             server_name: Name of the MCP server
             tools: List of tool definitions
-            config: Optional MCP server configuration
+            server_config: Server configuration with 'command', 'args', 'env'
 
         Returns:
             Path to the generated server directory
         """
-        logger.info(f"Generating files for server: {server_name}")
+        # Normalize server name to be a valid Python package name
+        normalized_name = self._normalize_server_name(server_name)
+        logger.info(f"Generating files for server: {server_name} (as {normalized_name})")
 
-        # Create server directory
-        server_dir = self.servers_dir / server_name
+        # Create server directory with normalized name
+        server_dir = self.servers_dir / normalized_name
         server_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize the tool wrapper generator
@@ -109,17 +135,16 @@ class MCPServerManager:
             # Create the complete file content with imports
             file_content = self._create_tool_file_content(
                 function_code=function_code,
-                server_name=server_name,
-                config=config
+                tool_name=tool_name,
             )
 
             # Write the file
             file_path.write_text(file_content)
             logger.info(f"Created tool file: {file_path}")
 
-        # Create __init__.py to make it a package
+        # Create __init__.py with connection manager and all tool exports
         init_file = server_dir / "__init__.py"
-        init_content = self._create_init_file(tools, server_name)
+        init_content = self._create_init_file(tools, normalized_name, server_config)
         init_file.write_text(init_content)
 
         logger.info(f"Generated {len(tools)} tool files in {server_dir}")
@@ -128,43 +153,44 @@ class MCPServerManager:
     def _create_tool_file_content(
         self,
         function_code: str,
-        server_name: str,
-        config: Optional[Dict[str, Any]] = None
+        tool_name: str,
     ) -> str:
         """
-        Create the complete content for a tool file including imports.
+        Create the content for an individual tool file.
+
+        Each tool file imports the connection manager from the package's __init__.py.
 
         Args:
             function_code: The generated function code
-            server_name: Name of the MCP server
-            config: Optional MCP server configuration
+            tool_name: Name of the tool
 
         Returns:
             Complete file content as a string
         """
-        config_json = json.dumps(config or {}, indent=4) if config else "{}"
-
-        return f'''"""Auto-generated MCP tool wrapper for {server_name}."""
+        return f'''"""Auto-generated MCP tool wrapper: {tool_name}"""
 
 from typing import Any
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
 
-
-# MCP Server Configuration
-config = {config_json}
+# Import the shared connection manager from the package
+from . import _connection_manager
 
 
 {function_code}
 '''
 
-    def _create_init_file(self, tools: List[Any], server_name: str) -> str:
+    def _create_init_file(
+        self,
+        tools: List[Any],
+        server_name: str,
+        server_config: Dict[str, Any]
+    ) -> str:
         """
-        Create __init__.py content that exports all tools.
+        Create __init__.py content with connection manager and tool exports.
 
         Args:
             tools: List of tool definitions
             server_name: Name of the MCP server
+            server_config: Server configuration
 
         Returns:
             Content for __init__.py file
@@ -174,18 +200,57 @@ config = {config_json}
             for tool in tools
         ]
 
-        imports = "\n".join([
+        # Generate imports for all tools
+        tool_imports = "\n".join([
             f"from .{name} import {name}"
             for name in tool_names
         ])
 
-        all_exports = ", ".join([f'"{name}"' for name in tool_names])
+        # Generate __all__ list
+        all_exports = ["connect", "disconnect", "get_connection_manager"] + tool_names
+        all_exports_str = ", ".join([f'"{name}"' for name in all_exports])
 
-        return f'''"""Auto-generated MCP tools for {server_name}."""
+        # Generate connection manager code
+        connection_manager_code = generate_connection_manager_code(
+            command=server_config.get("command", ""),
+            args=server_config.get("args", []),
+            env=server_config.get("env"),
+        )
 
-{imports}
+        return f'''"""Auto-generated MCP tools for {server_name}.
 
-__all__ = [{all_exports}]
+Usage:
+    from src.servers.{server_name} import connect, disconnect, {tool_names[0] if tool_names else 'tool_name'}
+
+    # Connect to the server first
+    await connect()
+
+    # Use the tools
+    result = await {tool_names[0] if tool_names else 'tool_name'}(...)
+
+    # Disconnect when done
+    await disconnect()
+
+Or use the connection manager directly:
+    from src.servers.{server_name} import get_connection_manager
+
+    manager = get_connection_manager()
+    async with manager:
+        session = await manager.get_session()
+        # Use session directly
+"""
+
+from typing import Any
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+from src.manager import MCPConnectionManager
+
+{connection_manager_code}
+
+# Import all tool functions
+{tool_imports}
+
+__all__ = [{all_exports_str}]
 '''
 
     async def setup_server_from_config(
@@ -233,7 +298,7 @@ __all__ = [{all_exports}]
         server_dir = self.generate_server_files(
             server_name=server_name,
             tools=tools,
-            config={"mcpServers": {server_name: server_config}}
+            server_config=server_config,
         )
 
         return server_dir
