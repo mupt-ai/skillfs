@@ -71,7 +71,7 @@ class E2BSandbox(SandboxConnection):
         # Create E2B sandbox (timeout is applied per run_code call)
         instance._sandbox = Sandbox.create(
             api_key=api_key,
-            timeout=instance.config.timeout,
+            template="uv-downloaded"
         )
 
         instance._is_alive = True

@@ -10,11 +10,28 @@ This script demonstrates how to:
 import asyncio
 import os
 from pathlib import Path
+from skillfs.storage.local import LocalBundleStore
 
 import anthropic
 from skillfs.agents import Agent
 from skillfs.sandboxes import E2BSandbox, SandboxConfig
-from skillfs.storage.gcs import GCSBundleStore
+# import asyncio
+# sandbox = E2BSandbox.create(config=SandboxConfig(timeout=3000))
+# store = GCSBundleStore(bucket="dari_dev_test_bucket", prefix="agents/")
+
+# agent = Agent(
+#     agent_id="example-agent-001",
+#     sandbox=sandbox,
+#     store=store,
+#     mcp_servers={
+#         "playwright": {
+#             "command": "npx",
+#             "args": ["@playwright/mcp@latest"]
+#         }
+#     },
+#     generate_mcp_tools=True,
+# )
+# asyncio.run(agent.load())
 
 
 async def main():
@@ -32,7 +49,7 @@ async def main():
     sandbox = E2BSandbox.create(config=SandboxConfig(timeout=3000))
 
     # Setup storage backend (you can replace this with LocalBundleStore)
-    store = GCSBundleStore(bucket="dari_dev_test_bucket", prefix="agents/")
+    store = LocalBundleStore(directory="/tmp/agent-bundles2", prefix="agents/")
 
     # Create and load agent
     print("Initializing agent...")
@@ -46,7 +63,16 @@ async def main():
                 "args": [
                     "@playwright/mcp@latest",
                     "--cdp-endpoint",
-                    "wss://proxy.iad-elated-ellis.onkernel.com:8443/browser/cdp?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3OTY5NjEwNzYsInNlc3Npb24iOnsiaWQiOiJ0bjRqZmp0NGU0aHlxYTVidmloZ2lsamQiLCJjZHBQb3J0Ijo5MjIyLCJjZHBXc1BhdGgiOiIvZGV2dG9vbHMvYnJvd3Nlci9jYTU5ZDhiMS05MzRlLTRhZWUtOTY2MC0xZjc0ZDI0NDcxZTgiLCJpbnN0YW5jZU5hbWUiOiJicm93c2VyLXN0ZWFsdGgtcHJvZHVjdGlvbi00NTQtcHJpbWUtdGFuay01ODM0IiwiZnFkbiI6IndhbmRlcmluZy1iYW5hbmEtZXVpcWgweTgucHJvZC1pYWQtdW5pa3JhZnQtNC5vbmtlcm5lbC5hcHAiLCJtZXRybyI6Imh0dHBzOi8vYXBpLnByb2QtaWFkLXVuaWtyYWZ0LTQub25rZXJuZWwucnVuL3YxIiwidXNlcklkIjoiemg5MTh1eXEzdm16cjEwbXhkeGNqdjluIiwib3JnSWQiOiJvbzRucTNnYjg3ZDluNjEycGdodTNpMG4iLCJzdGVhbHRoIjp0cnVlLCJoZWFkbGVzcyI6ZmFsc2UsInJlcGxheVByZWZpeCI6InMzOi8va2VybmVsLWFwaS1wcm9kL3Nlc3Npb25yZXBsYXlzL29vNG5xM2diODdkOW42MTJwZ2h1M2kwbi90bjRqZmp0NGU0aHlxYTVidmloZ2lsamQiLCJrZXJuZWxIdHRwU2VydmVyUG9ydCI6NDQ0LCJ0aW1lb3V0U2Vjb25kcyI6NjAsImNyZWF0ZWRBdCI6IjIwMjUtMTItMTFUMDM6NTE6MTYuMDg2MTc3MzI4WiIsImltYWdlIjoib25rZXJuZWwva2VybmVsLWN1LXYyNDo0MDhiY2QxIiwic3RlYWx0aFByb3h5SWRlbnRpZmllciI6Ijg3NTY1X25YREZGQDE0NC4xNjguOS4xMzc6NjEyMzQiLCJsaXZlU2x1ZyI6InBCREV0OWVWcVZYTSIsInByaXZhdGVJUCI6IjE3Mi4xNi4xLjEwMSJ9fQ.wgOQFsOzZdLiV1-yUHZwZkiYUjf3k9vKPx5r4Rzkeeo"
+                    "wss://proxy.iad-elated-ellis.onkernel.com:8443/browser/cdp?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3OTc0NTg3MTYsInNlc3Npb24iOnsiaWQiOiJsdDRhNDZvbHU5bGNydXlhNXpjMnZrZ3MiLCJjZHBQb3J0Ijo5MjIyLCJjZHBXc1BhdGgiOiIiLCJpbnN0YW5jZU5hbWUiOiJicm93c2VyLXN0ZWFsdGgtcHJvZHVjdGlvbi0xOTY5LW1heGltdW0tZ2FyZ2FudGEtMTAzNyIsImZxZG4iOiJ0aHJvYmJpbmctd2F0ZXItdGRmaGpjMG4ucHJvZC1pYWQtdW5pa3JhZnQtNC5vbmtlcm5lbC5hcHAiLCJtZXRybyI6Imh0dHBzOi8vYXBpLnByb2QtaWFkLXVuaWtyYWZ0LTQub25rZXJuZWwucnVuL3YxIiwidXNlcklkIjoiemg5MTh1eXEzdm16cjEwbXhkeGNqdjluIiwib3JnSWQiOiJvbzRucTNnYjg3ZDluNjEycGdodTNpMG4iLCJzdGVhbHRoIjp0cnVlLCJoZWFkbGVzcyI6ZmFsc2UsInJlcGxheVByZWZpeCI6InMzOi8va2VybmVsLWFwaS1wcm9kL3Nlc3Npb25yZXBsYXlzL29vNG5xM2diODdkOW42MTJwZ2h1M2kwbi9sdDRhNDZvbHU5bGNydXlhNXpjMnZrZ3MiLCJrZXJuZWxIdHRwU2VydmVyUG9ydCI6NDQ0LCJ0aW1lb3V0U2Vjb25kcyI6NjAsImNyZWF0ZWRBdCI6IjIwMjUtMTItMTZUMjI6MDU6MTYuNzI2NzUxNDQzWiIsImltYWdlIjoib25rZXJuZWwva2VybmVsLWN1LXYyNDo0MDhiY2QxIiwic3RlYWx0aFByb3h5SWRlbnRpZmllciI6Ijg3NTY1X25YREZGQDIwNC4yNDIuMTc2LjU5OjYxMjM0IiwibGl2ZVNsdWciOiJ1NHFXMDE2Nm4yRTYiLCJwcml2YXRlSVAiOiIxNzIuMTYuMy4xMDUifX0.ODJ5NfJNQ5Bv91Pxm-bEdTx4saSLMYVtIsut9ugwJo0"
+                ]
+            },
+            "browser-use": {
+                "command": "npx",
+                "args": [
+                    "mcp-remote",
+                    "https://api.browser-use.com/mcp",
+                    "--header",
+                    "X-Browser-Use-API-Key: bu_863ra40sgy4lKyyDnoda17nXYuevAHJ_mV11Kifm1vE"
                 ]
             }
         },
@@ -84,43 +110,55 @@ async def main():
 ENVIRONMENT SETUP:
 - You have access to a live E2B sandbox (cloud-based Linux container)
 - The sandbox has a Git repository initialized at /home/user/repo
-- MCP servers are set up and their tools are available in the repo at src/servers/
+- The repo is set up with uv (Python package manager) and has a virtual environment
+- MCP servers are set up and their tools are available at src/servers/
+- The skillfs package is installed and available for imports
 - All your work is automatically versioned and can persist across sessions
-- The agent state (files, code, changes) is stored in Google Cloud Storage
+
+CRITICAL: ALWAYS USE UV TO RUN PYTHON
+- ALWAYS run Python code with: uv run python ...
+- ALWAYS run Python modules with: uv run python -m <module>
+- NEVER use bare `python` or `python3` commands - they won't have the right environment
+- The virtual environment is managed by uv, so all commands must go through it
 
 CAPABILITIES:
 - You can execute ANY shell command via the run_command tool
 - You have full read/write access to the filesystem
-- You can install packages, run scripts, create files, etc.
+- You can install packages with: uv add <package>
 - Python, Node.js, and common dev tools are pre-installed
-- MCP tools (like Playwright) are available as Python modules in the repo
-- When running Python, always run with uv
-- Make sure you import with absolute paths, not relative paths
+- MCP tools are available as Python modules in src/servers/
 
 WORKING DIRECTORY STRUCTURE:
 /home/user/repo/
 ├── src/
+│   ├── skillfs/         # SkillFS framework (connection managers, etc.)
 │   ├── skills/          # Custom agent skills/capabilities
-│   ├── servers/         # MCP server tool wrappers
+│   ├── servers/         # MCP server tool wrappers (e.g., playwright, browser_use)
 │   └── __init__.py
 ├── tests/
-└── pyproject.toml
+├── pyproject.toml       # Project config - managed by uv
+└── .venv/               # Virtual environment - managed by uv
 
-BEST PRACTICES:
-1. Use run_command to explore before making changes (ls, cat, etc.)
-2. Create skills in src/skills/ as reusable Python modules
-3. Write tests for your code when appropriate
-4. The repo is a Git repository - all changes are tracked
-5. Be efficient - you can chain commands with && or use scripts
-6. Check exit codes to verify command success
-7. For complex tasks, break them into smaller commands
+IMPORTING MCP SERVERS:
+MCP server tools are in src/servers/<server_name>/. To use them:
+1. Import the server module: from src.servers.<server_name> import connect, disconnect, <tool_name>
+2. Connect first: await connect()
+3. Use tools: result = await <tool_name>(...)
+4. Disconnect when done: await disconnect()
 
 EXAMPLES:
-- Read a file: run_command("cat /home/user/repo/src/skills/example.py")
-- Install package: run_command("cd /home/user/repo && pip install requests")
-- Create a skill: run_command("cat > /home/user/repo/src/skills/new_skill.py << 'EOF'\\n<code>\\nEOF")
-- Run Python: run_command("cd /home/user/repo && python -m src.skills.my_skill")
-- List files: run_command("ls -la /home/user/repo/src")
+- List files: run_command("ls -la /home/user/repo/src/servers")
+- Run a Python script: run_command("cd /home/user/repo && uv run python my_script.py")
+- Run a module: run_command("cd /home/user/repo && uv run python -m src.skills.my_skill")
+- Add a package: run_command("cd /home/user/repo && uv add requests")
+- Test MCP server: run_command("cd /home/user/repo && uv run python -c 'from src.servers.playwright import connect; print(connect)'")
+
+BEST PRACTICES:
+1. ALWAYS use `uv run python` to run Python code
+2. Use run_command to explore before making changes (ls, cat, etc.)
+3. Create skills in src/skills/ as reusable Python modules
+4. Import using absolute paths: from src.servers.xxx import ...
+5. The repo is a Git repository - all changes are tracked
 
 When the session ends, all your work will be committed to the Git repo and saved to persistent storage."""
 

@@ -2,7 +2,11 @@ from typing import Any, List
 
 
 class MCPToolWrapperGenerator:
-    """Generator for creating Python function wrappers from MCP tool definitions"""
+    """Generator for creating Python function wrappers from MCP tool definitions.
+
+    Generates functions that use a shared connection manager instead of
+    creating new connections per call.
+    """
 
     JSON_TO_PYTHON_TYPE_MAPPING = {
         'string': 'str',
@@ -55,34 +59,40 @@ class MCPToolWrapperGenerator:
         params_str = ", ".join(params)
         return params_str, arg_props
 
-    def _generate_arguments_section(self, arg_props: List[str]) -> str:
+    def _generate_arguments_section(self, arg_props: List[str], indent: int = 4) -> str:
         """
         Generate the arguments dictionary construction code.
 
         Args:
             arg_props: List of argument property names
+            indent: Base indentation level (number of spaces)
 
         Returns:
-            Code string for building the arguments dictionary (with proper indentation for insertion)
+            Code string for building the arguments dictionary
         """
         if not arg_props:
             return "arguments = {}"
 
-        # Generate argument items with proper indentation (will be at 12 spaces when inserted)
+        base_indent = " " * indent
+        inner_indent = " " * (indent + 4)
+
         arg_items = "\n".join([
-            f'                "{prop}": {prop},'
+            f'{inner_indent}"{prop}": {prop},'
             for prop in arg_props
         ])
 
         return f"""arguments = {{
 {arg_items}
-            }}
-            # Remove None values
-            arguments = {{k: v for k, v in arguments.items() if v is not None}}"""
+{base_indent}}}
+{base_indent}# Remove None values
+{base_indent}arguments = {{k: v for k, v in arguments.items() if v is not None}}"""
 
     def tool_to_python_function(self, tool: Any) -> str:
         """
         Convert an MCP tool object to a Python function definition string.
+
+        Generated functions use a shared connection manager that must be
+        initialized before calling the functions.
 
         Args:
             tool: An MCP tool object with name, description, and inputSchema
@@ -92,29 +102,19 @@ class MCPToolWrapperGenerator:
         """
         params_str, arg_props = self._extract_function_signature(tool)
         description = tool.description if hasattr(tool, 'description') and tool.description else ""
-        arguments_section = self._generate_arguments_section(arg_props)
+        arguments_section = self._generate_arguments_section(arg_props, indent=4)
 
-        # Build the function with proper indentation
-        # Note: arguments_section should not be indented here since it has its own indentation
         func_body = f'''async def {tool.name}({params_str}) -> Any:
     """
     {description}
     """
-    server_cfg = config["mcpServers"]["{self.server_name}"]
-    params = StdioServerParameters(
-        command=server_cfg["command"],
-        args=server_cfg["args"],
-        env=None,
+    session = await _connection_manager.get_session()
+    {arguments_section}
+    result = await session.call_tool(
+        "{tool.name}",
+        arguments=arguments,
     )
-    async with stdio_client(params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            {arguments_section}
-            result = await session.call_tool(
-                "{tool.name}",
-                arguments=arguments,
-            )
-            return result'''
+    return result'''
 
         return func_body
 
