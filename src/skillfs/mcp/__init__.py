@@ -1,7 +1,6 @@
 """MCP (Model Context Protocol) integration for SkillFS."""
 
 from skillfs.mcp.connection_manager import (
-    MCPConnectionManager,
     generate_connection_manager_code,
 )
 from skillfs.mcp.generate_tool_wrapper import (
@@ -11,7 +10,6 @@ from skillfs.mcp.generate_tool_wrapper import (
 from skillfs.mcp.server_manager import MCPServerManager
 
 __all__ = [
-    "MCPConnectionManager",
     "generate_connection_manager_code",
     "MCPToolWrapperGenerator",
     "tool_to_python_function",

@@ -28,7 +28,7 @@ async def main():
     # Create and load agent
     print("Initializing agent...")
     agent = Agent(
-        agent_id="shell-agent-001",
+        agent_id="shell-agent-003",
         sandbox=sandbox,
         store=store,
         mcp_servers={

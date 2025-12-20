@@ -1,6 +1,7 @@
 """Manager for MCP server tool generation and file creation."""
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -206,44 +207,38 @@ from . import _connection_manager
             for name in tool_names
         ])
 
-        # Generate __all__ list
-        all_exports = ["connect", "disconnect", "get_connection_manager"] + tool_names
+        normalized_name = self._normalize_server_name(server_name)
+
+        # Generate __all__ list with server-specific connect/disconnect
+        all_exports = [f"connect_{normalized_name}", f"disconnect_{normalized_name}"] + tool_names
         all_exports_str = ", ".join([f'"{name}"' for name in all_exports])
 
         # Generate connection manager code
         connection_manager_code = generate_connection_manager_code(
             command=server_config.get("command", ""),
             args=server_config.get("args", []),
-            env=server_config.get("env"),
         )
 
         return f'''"""Auto-generated MCP tools for {server_name}.
 
 Usage:
-    from src.servers.{server_name} import connect, disconnect, {tool_names[0] if tool_names else 'tool_name'}
+    from src.servers.{normalized_name} import connect_{normalized_name}, disconnect_{normalized_name}, {tool_names[0] if tool_names else 'tool_name'}
 
     # Connect to the server first
-    await connect()
+    await connect_{normalized_name}()
 
     # Use the tools
     result = await {tool_names[0] if tool_names else 'tool_name'}(...)
 
     # Disconnect when done
-    await disconnect()
-
-Or use the connection manager directly:
-    from src.servers.{server_name} import get_connection_manager
-
-    manager = get_connection_manager()
-    async with manager:
-        session = await manager.get_session()
-        # Use session directly
+    await disconnect_{normalized_name}()
 """
 
 from typing import Any
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from src.manager import MCPConnectionManager
+import os
 
 {connection_manager_code}
 

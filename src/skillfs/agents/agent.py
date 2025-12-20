@@ -199,7 +199,9 @@ class Agent:
             results = {}
 
             for server_name, local_dir in server_dirs.items():
-                remote_dir = f"{sandbox_servers_base}/{server_name}"
+                # Extract normalized directory name from the local path
+                normalized_name = local_dir.name
+                remote_dir = f"{sandbox_servers_base}/{normalized_name}"
                 logger.info(f"Uploading {server_name} tools to {remote_dir}")
                 upload_tasks.append(self.sandbox.upload_directory(local_dir, remote_dir))
                 results[server_name] = Path(remote_dir)

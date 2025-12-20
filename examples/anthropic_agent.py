@@ -44,17 +44,23 @@ async def main():
     # Initialize the Anthropic client
     client = anthropic.Anthropic(api_key=anthropic_api_key)
 
-    # Create sandbox
+    # Create sandbox with environment variables
     print("Creating sandbox...")
-    sandbox = E2BSandbox.create(config=SandboxConfig(timeout=3000))
+    sandbox = E2BSandbox.create(config=SandboxConfig(
+        timeout=6000,
+        envs={
+            'BROWSER_USE_API_KEY': os.environ.get('BROWSER_USE_API_KEY', ''),
+            'CDP_ENDPOINT': 'wss://proxy.iad-elated-ellis.onkernel.com:8443/browser/cdp?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3OTc1NzMzNTAsInNlc3Npb24iOnsiaWQiOiJ1bm85bTJlMDUzcnVwczE3dWJ0Y3JpbnYiLCJjZHBQb3J0Ijo5MjIyLCJjZHBXc1BhdGgiOiIiLCJpbnN0YW5jZU5hbWUiOiJicm93c2VyLXN0ZWFsdGgtcHJvZHVjdGlvbi05OTAtYmVjb21pbmctd29sdmVyaW5lLTk3MzIiLCJmcWRuIjoiZmFsbGluZy1sZWFmLXhkdXFwMzlzLnByb2QtaWFkLXVuaWtyYWZ0LTQub25rZXJuZWwuYXBwIiwibWV0cm8iOiJodHRwczovL2FwaS5wcm9kLWlhZC11bmlrcmFmdC00Lm9ua2VybmVsLnJ1bi92MSIsInVzZXJJZCI6InpoOTE4dXlxM3ZtenIxMG14ZHhjanY5biIsIm9yZ0lkIjoib280bnEzZ2I4N2Q5bjYxMnBnaHUzaTBuIiwic3RlYWx0aCI6dHJ1ZSwiaGVhZGxlc3MiOmZhbHNlLCJyZXBsYXlQcmVmaXgiOiJzMzovL2tlcm5lbC1hcGktcHJvZC9zZXNzaW9ucmVwbGF5cy9vbzRucTNnYjg3ZDluNjEycGdodTNpMG4vdW5vOW0yZTA1M3J1cHMxN3VidGNyaW52Iiwia2VybmVsSHR0cFNlcnZlclBvcnQiOjQ0NCwidGltZW91dFNlY29uZHMiOjYwLCJjcmVhdGVkQXQiOiIyMDI1LTEyLTE4VDA1OjU1OjUwLjY5NTQ4ODMzWiIsImltYWdlIjoib25rZXJuZWwva2VybmVsLWN1LXYyNDo0MDhiY2QxIiwic3RlYWx0aFByb3h5SWRlbnRpZmllciI6Ijg3NTY1X25YREZGQDE0MC4yMzMuMjI4Ljg0OjYxMjM0IiwibGl2ZVNsdWciOiJtZUpBYWppRHJHME8iLCJwcml2YXRlSVAiOiIxNzIuMTYuNS40MSJ9fQ.Vo0sizoLxKNxc34ILVHKcaEzylw1VQoxB3snOkYySuU',
+        }
+    ))
 
     # Setup storage backend (you can replace this with LocalBundleStore)
-    store = LocalBundleStore(directory="/tmp/agent-bundles2", prefix="agents/")
+    store = LocalBundleStore(directory="/tmp/agent-bundles4", prefix="agents/")
 
     # Create and load agent
     print("Initializing agent...")
     agent = Agent(
-        agent_id="example-agent-001",
+        agent_id="example-agent-009",
         sandbox=sandbox,
         store=store,
         mcp_servers={
@@ -63,7 +69,7 @@ async def main():
                 "args": [
                     "@playwright/mcp@latest",
                     "--cdp-endpoint",
-                    "wss://proxy.iad-elated-ellis.onkernel.com:8443/browser/cdp?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3OTc0NTg3MTYsInNlc3Npb24iOnsiaWQiOiJsdDRhNDZvbHU5bGNydXlhNXpjMnZrZ3MiLCJjZHBQb3J0Ijo5MjIyLCJjZHBXc1BhdGgiOiIiLCJpbnN0YW5jZU5hbWUiOiJicm93c2VyLXN0ZWFsdGgtcHJvZHVjdGlvbi0xOTY5LW1heGltdW0tZ2FyZ2FudGEtMTAzNyIsImZxZG4iOiJ0aHJvYmJpbmctd2F0ZXItdGRmaGpjMG4ucHJvZC1pYWQtdW5pa3JhZnQtNC5vbmtlcm5lbC5hcHAiLCJtZXRybyI6Imh0dHBzOi8vYXBpLnByb2QtaWFkLXVuaWtyYWZ0LTQub25rZXJuZWwucnVuL3YxIiwidXNlcklkIjoiemg5MTh1eXEzdm16cjEwbXhkeGNqdjluIiwib3JnSWQiOiJvbzRucTNnYjg3ZDluNjEycGdodTNpMG4iLCJzdGVhbHRoIjp0cnVlLCJoZWFkbGVzcyI6ZmFsc2UsInJlcGxheVByZWZpeCI6InMzOi8va2VybmVsLWFwaS1wcm9kL3Nlc3Npb25yZXBsYXlzL29vNG5xM2diODdkOW42MTJwZ2h1M2kwbi9sdDRhNDZvbHU5bGNydXlhNXpjMnZrZ3MiLCJrZXJuZWxIdHRwU2VydmVyUG9ydCI6NDQ0LCJ0aW1lb3V0U2Vjb25kcyI6NjAsImNyZWF0ZWRBdCI6IjIwMjUtMTItMTZUMjI6MDU6MTYuNzI2NzUxNDQzWiIsImltYWdlIjoib25rZXJuZWwva2VybmVsLWN1LXYyNDo0MDhiY2QxIiwic3RlYWx0aFByb3h5SWRlbnRpZmllciI6Ijg3NTY1X25YREZGQDIwNC4yNDIuMTc2LjU5OjYxMjM0IiwibGl2ZVNsdWciOiJ1NHFXMDE2Nm4yRTYiLCJwcml2YXRlSVAiOiIxNzIuMTYuMy4xMDUifX0.ODJ5NfJNQ5Bv91Pxm-bEdTx4saSLMYVtIsut9ugwJo0"
+                    "$CDP_ENDPOINT"
                 ]
             },
             "browser-use": {
@@ -72,7 +78,7 @@ async def main():
                     "mcp-remote",
                     "https://api.browser-use.com/mcp",
                     "--header",
-                    "X-Browser-Use-API-Key: bu_863ra40sgy4lKyyDnoda17nXYuevAHJ_mV11Kifm1vE"
+                    "X-Browser-Use-API-Key: $BROWSER_USE_API_KEY"
                 ]
             }
         },
@@ -131,34 +137,39 @@ CAPABILITIES:
 WORKING DIRECTORY STRUCTURE:
 /home/user/repo/
 ├── src/
-│   ├── skillfs/         # SkillFS framework (connection managers, etc.)
 │   ├── skills/          # Custom agent skills/capabilities
 │   ├── servers/         # MCP server tool wrappers (e.g., playwright, browser_use)
 │   └── __init__.py
-├── tests/
 ├── pyproject.toml       # Project config - managed by uv
 └── .venv/               # Virtual environment - managed by uv
 
 IMPORTING MCP SERVERS:
 MCP server tools are in src/servers/<server_name>/. To use them:
-1. Import the server module: from src.servers.<server_name> import connect, disconnect, <tool_name>
-2. Connect first: await connect()
+1. Import the server module: from src.servers.<server_name> import connect_<server_name>, disconnect_<server_name>, <tool_name>
+2. Connect first: await connect_<server_name>()
 3. Use tools: result = await <tool_name>(...)
-4. Disconnect when done: await disconnect()
+4. Disconnect when done: await disconnect_<server_name>()
+
+Note: Each server has its own connect/disconnect functions (e.g., connect_playwright, connect_browser_use)
+so you can use multiple MCP servers in the same script without naming conflicts.
 
 EXAMPLES:
 - List files: run_command("ls -la /home/user/repo/src/servers")
 - Run a Python script: run_command("cd /home/user/repo && uv run python my_script.py")
 - Run a module: run_command("cd /home/user/repo && uv run python -m src.skills.my_skill")
 - Add a package: run_command("cd /home/user/repo && uv add requests")
-- Test MCP server: run_command("cd /home/user/repo && uv run python -c 'from src.servers.playwright import connect; print(connect)'")
+- Test MCP server: run_command("cd /home/user/repo && uv run python -c 'from src.servers.playwright import connect_playwright; print(connect_playwright)'")
+
+REQUIREMENTS:
+- When you are writing new scripts, write them in skills/ and import server stuff as from src.servers.xxx import ...
+- When the user asks you to do a task which requires tools, check the servers you have access to and the skills you have access to. If you don't see the necessary tools, tell that to the user. Do not ever try to download new packages or install new packages.
+- Do things incrementally. For instance do not just write one mega script - do it in line Python first, make sure it works, and THEN save the script to skills/ 
 
 BEST PRACTICES:
 1. ALWAYS use `uv run python` to run Python code
 2. Use run_command to explore before making changes (ls, cat, etc.)
-3. Create skills in src/skills/ as reusable Python modules
-4. Import using absolute paths: from src.servers.xxx import ...
-5. The repo is a Git repository - all changes are tracked
+3. Import using absolute paths: from src.servers.xxx import ...
+4. The repo is a Git repository - all changes are tracked
 
 When the session ends, all your work will be committed to the Git repo and saved to persistent storage."""
 

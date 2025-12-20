@@ -38,12 +38,17 @@ class SandboxConfig:
     api_key: Optional[str] = None
     """API key for sandbox service (if required)."""
 
+    envs: Optional[Dict[str, str]] = None
+    """Environment variables to set in the sandbox."""
+
     metadata: Dict[str, Any] = None
     """Additional provider-specific configuration."""
 
     def __post_init__(self):
         if self.metadata is None:
             self.metadata = {}
+        if self.envs is None:
+            self.envs = {}
 
 
 class SandboxConnection(ABC):
