@@ -100,9 +100,12 @@ class MCPServerManager:
         """
         Generate a directory with tool wrapper files for an MCP server.
 
-        The generated package structure:
+        The generated package structure follows the Agent Skills standard:
+        - SKILL.md: Skill metadata with YAML frontmatter
         - __init__.py: Exports all tools, connect(), disconnect(), and get_connection_manager()
-        - Each tool gets its own file that uses the shared connection manager
+        - tools/: Directory containing individual tool wrapper files
+          - __init__.py: Exports all tool functions
+          - Each tool gets its own file that uses the shared connection manager
 
         Args:
             server_name: Name of the MCP server
@@ -120,13 +123,17 @@ class MCPServerManager:
         server_dir = self.servers_dir / normalized_name
         server_dir.mkdir(parents=True, exist_ok=True)
 
+        # Create tools subdirectory
+        tools_dir = server_dir / "tools"
+        tools_dir.mkdir(parents=True, exist_ok=True)
+
         # Initialize the tool wrapper generator
         generator = MCPToolWrapperGenerator(server_name=server_name)
 
-        # Generate individual tool files
+        # Generate individual tool files in tools/ subdirectory
         for tool in tools:
             tool_name = tool.name if hasattr(tool, 'name') else str(tool)
-            file_path = server_dir / f"{tool_name}.py"
+            file_path = tools_dir / f"{tool_name}.py"
 
             logger.info(f"Generating tool file: {file_path}")
 
@@ -142,6 +149,17 @@ class MCPServerManager:
             # Write the file
             file_path.write_text(file_content)
             logger.info(f"Created tool file: {file_path}")
+
+        # Create tools/__init__.py with tool exports
+        tools_init_file = tools_dir / "__init__.py"
+        tools_init_content = self._create_tools_init_file(tools)
+        tools_init_file.write_text(tools_init_content)
+
+        # Create SKILL.md with frontmatter
+        skill_file = server_dir / "SKILL.md"
+        skill_content = self._create_skill_md(server_name, normalized_name, tools)
+        skill_file.write_text(skill_content)
+        logger.info(f"Created SKILL.md: {skill_file}")
 
         # Create __init__.py with connection manager and all tool exports
         init_file = server_dir / "__init__.py"
@@ -159,7 +177,7 @@ class MCPServerManager:
         """
         Create the content for an individual tool file.
 
-        Each tool file imports the connection manager from the package's __init__.py.
+        Each tool file imports the connection manager from the parent package's __init__.py.
 
         Args:
             function_code: The generated function code
@@ -172,11 +190,97 @@ class MCPServerManager:
 
 from typing import Any
 
-# Import the shared connection manager from the package
-from . import _connection_manager
+# Import the shared connection manager from the parent package
+from .. import _connection_manager
 
 
 {function_code}
+'''
+
+    def _create_tools_init_file(self, tools: List[Any]) -> str:
+        """
+        Create __init__.py content for the tools subdirectory.
+
+        Args:
+            tools: List of tool definitions
+
+        Returns:
+            Content for tools/__init__.py file
+        """
+        tool_names = [
+            tool.name if hasattr(tool, 'name') else str(tool)
+            for tool in tools
+        ]
+
+        # Generate imports for all tools
+        tool_imports = "\n".join([
+            f"from .{name} import {name}"
+            for name in tool_names
+        ])
+
+        # Generate __all__ list
+        all_exports_str = ", ".join([f'"{name}"' for name in tool_names])
+
+        return f'''"""Auto-generated tool exports."""
+
+{tool_imports}
+
+__all__ = [{all_exports_str}]
+'''
+
+    def _create_skill_md(
+        self,
+        server_name: str,
+        normalized_name: str,
+        tools: List[Any]
+    ) -> str:
+        """
+        Create SKILL.md content with YAML frontmatter.
+
+        Args:
+            server_name: Original server name
+            normalized_name: Python-safe normalized name
+            tools: List of tool definitions
+
+        Returns:
+            Content for SKILL.md file
+        """
+        tool_names = [
+            tool.name if hasattr(tool, 'name') else str(tool)
+            for tool in tools
+        ]
+
+        # Build tool list for the body
+        tool_list = "\n".join([f"- `{name}`" for name in tool_names])
+
+        return f'''---
+name: {normalized_name}
+description: Tools provided by the MCP server {server_name}
+---
+
+# {server_name}
+
+This skill provides tools from the `{server_name}` MCP server.
+
+## Available Tools
+
+{tool_list}
+
+## Usage
+
+```python
+from src.servers.{normalized_name} import connect_{normalized_name}, disconnect_{normalized_name}
+from src.servers.{normalized_name}.tools import {tool_names[0] if tool_names else 'tool_name'}
+
+# Connect to the server first
+await connect_{normalized_name}()
+
+# Use the tools
+result = await {tool_names[0] if tool_names else 'tool_name'}(...)
+
+# Disconnect when done
+await disconnect_{normalized_name}()
+```
 '''
 
     def _create_init_file(
@@ -201,9 +305,9 @@ from . import _connection_manager
             for tool in tools
         ]
 
-        # Generate imports for all tools
+        # Generate imports for all tools from .tools subpackage
         tool_imports = "\n".join([
-            f"from .{name} import {name}"
+            f"from .tools.{name} import {name}"
             for name in tool_names
         ])
 
@@ -242,7 +346,7 @@ import os
 
 {connection_manager_code}
 
-# Import all tool functions
+# Import all tool functions from tools/ subdirectory
 {tool_imports}
 
 __all__ = [{all_exports_str}]
