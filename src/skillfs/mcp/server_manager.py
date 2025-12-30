@@ -296,7 +296,7 @@ await disconnect_{normalized_name}()
     def _create_init_file(
         self,
         tools: List[Any],
-        server_name: str,
+        normalized_name: str,
         server_config: Dict[str, Any]
     ) -> str:
         """
@@ -304,7 +304,7 @@ await disconnect_{normalized_name}()
 
         Args:
             tools: List of tool definitions
-            server_name: Name of the MCP server
+            normalized_name: Python-safe normalized server name
             server_config: Server configuration
 
         Returns:
@@ -321,8 +321,6 @@ await disconnect_{normalized_name}()
             for name in tool_names
         ])
 
-        normalized_name = self._normalize_server_name(server_name)
-
         # Generate __all__ list with server-specific connect/disconnect
         all_exports = [f"connect_{normalized_name}", f"disconnect_{normalized_name}"] + tool_names
         all_exports_str = ", ".join([f'"{name}"' for name in all_exports])
@@ -334,7 +332,7 @@ await disconnect_{normalized_name}()
             server_name=normalized_name,
         )
 
-        return f'''"""Auto-generated MCP tools for {server_name}.
+        return f'''"""Auto-generated MCP tools for {normalized_name}.
 
 Usage:
     from src.servers.{normalized_name} import connect_{normalized_name}, disconnect_{normalized_name}, {tool_names[0] if tool_names else 'tool_name'}
