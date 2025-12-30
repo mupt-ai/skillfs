@@ -78,7 +78,7 @@ class MCPServerManager:
         return tools
 
     def _normalize_server_name(self, server_name: str) -> str:
-        """Normalize server name to be a valid Python package name.
+        """Normalize server name to be a valid Python identifier.
 
         Replaces hyphens with underscores so the generated directory
         can be imported as a Python module.
@@ -88,8 +88,18 @@ class MCPServerManager:
 
         Returns:
             Normalized name safe for Python imports
+
+        Raises:
+            ValueError: If the normalized name is not a valid Python identifier
         """
-        return server_name.replace("-", "_")
+        normalized = server_name.replace("-", "_")
+        if not normalized.isidentifier():
+            raise ValueError(
+                f"Server name '{server_name}' cannot be normalized to a valid "
+                f"Python identifier (got '{normalized}'). Use only letters, "
+                "digits, hyphens, and underscores, and don't start with a digit."
+            )
+        return normalized
 
     def generate_server_files(
         self,
@@ -321,6 +331,7 @@ await disconnect_{normalized_name}()
         connection_manager_code = generate_connection_manager_code(
             command=server_config.get("command", ""),
             args=server_config.get("args", []),
+            server_name=normalized_name,
         )
 
         return f'''"""Auto-generated MCP tools for {server_name}.

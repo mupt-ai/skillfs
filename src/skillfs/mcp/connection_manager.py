@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 def generate_connection_manager_code(
     command: str,
     args: Optional[list] = None,
+    server_name: str = "",
 ) -> str:
     """
     Generate Python code that creates and manages an MCPConnectionManager.
@@ -21,7 +22,7 @@ def generate_connection_manager_code(
     Args:
         command: Command to run the MCP server
         args: Optional command-line arguments
-        env: Optional environment variables
+        server_name: Name of the server (used for function naming)
 
     Returns:
         Python code as a string
@@ -36,17 +37,12 @@ _connection_manager = MCPConnectionManager(
 )
 
 
-async def connect():
-    """Connect to the MCP server. Call this before using any tools."""
+async def connect_{server_name}():
+    """Connect to the {server_name} MCP server. Call this before using any tools."""
     await _connection_manager.connect()
 
 
-async def disconnect():
-    """Disconnect from the MCP server. Call this when done."""
+async def disconnect_{server_name}():
+    """Disconnect from the {server_name} MCP server. Call this when done."""
     await _connection_manager.disconnect()
-
-
-def get_connection_manager() -> MCPConnectionManager:
-    """Get the connection manager instance."""
-    return _connection_manager
 '''
