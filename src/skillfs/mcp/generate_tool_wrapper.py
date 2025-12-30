@@ -1,4 +1,4 @@
-from typing import Any, List
+from typing import Any, Dict, List, Optional
 
 
 class MCPToolWrapperGenerator:
@@ -15,6 +15,26 @@ class MCPToolWrapperGenerator:
         'boolean': 'bool',
         'array': 'list',
         'object': 'dict'
+    }
+
+    # Human-readable descriptions for MCP tool annotations
+    ANNOTATION_DESCRIPTIONS = {
+        'readOnlyHint': {
+            True: 'Read-only.',
+            False: None, 
+        },
+        'destructiveHint': {
+            True: 'May overwrite existing data.',
+            False: None,
+        },
+        'idempotentHint': {
+            True: 'Idempotent.',
+            False: None,
+        },
+        'openWorldHint': {
+            True: None,  # Don't state - obvious for browser/API tools
+            False: None,
+        },
     }
 
     def __init__(self, server_name: str = "chrome-devtools"):
@@ -87,6 +107,64 @@ class MCPToolWrapperGenerator:
 {base_indent}# Remove None values
 {base_indent}arguments = {{k: v for k, v in arguments.items() if v is not None}}"""
 
+    def _generate_docstring(self, tool: Any) -> str:
+        """Generate a comprehensive docstring. Returns empty string if no content."""
+        lines = []
+
+        # Description (only if provided)
+        if hasattr(tool, 'description') and tool.description:
+            lines.append(tool.description)
+            lines.append('')
+
+        # Args section (only if there are properties)
+        if hasattr(tool, 'inputSchema') and tool.inputSchema:
+            schema = tool.inputSchema
+            props = schema.get('properties', {})
+            required = schema.get('required', [])
+            if props:
+                lines.append('Args:')
+                for prop_name, prop_info in props.items():
+                    prop_type = prop_info.get('type', 'any')
+                    python_type = self.JSON_TO_PYTHON_TYPE_MAPPING.get(prop_type, 'Any')
+                    is_required = prop_name in required
+                    req_marker = '' if is_required else ', optional'
+                    param_line = f'    {prop_name} ({python_type}{req_marker})'
+                    if 'description' in prop_info:
+                        param_line += f': {prop_info["description"]}'
+                    lines.append(param_line)
+                    if 'enum' in prop_info:
+                        enum_values = ', '.join(repr(v) for v in prop_info['enum'])
+                        lines.append(f'        Allowed values: {enum_values}')
+                    if 'default' in prop_info:
+                        lines.append(f'        Default: {repr(prop_info["default"])}')
+                lines.append('')
+
+        # Annotations (only if provided and meaningful)
+        if hasattr(tool, 'annotations') and tool.annotations:
+            annotation_lines = self._format_annotations(tool.annotations)
+            if annotation_lines:
+                lines.append('Note:')
+                lines.extend(annotation_lines)
+                lines.append('')
+
+        # Clean up trailing empty lines
+        while lines and lines[-1] == '':
+            lines.pop()
+
+        return '\n    '.join(lines)
+
+    def _format_annotations(self, annotations: Any) -> List[str]:
+        """Format annotations into human-readable lines. Returns empty list if none apply."""
+        lines = []
+        for hint_name, descriptions in self.ANNOTATION_DESCRIPTIONS.items():
+            if isinstance(annotations, dict):
+                value = annotations.get(hint_name)
+            else:
+                value = getattr(annotations, hint_name, None)
+            if value is not None and value in descriptions and descriptions[value]:
+                lines.append(f'    {descriptions[value]}')
+        return lines
+
     def tool_to_python_function(self, tool: Any) -> str:
         """
         Convert an MCP tool object to a Python function definition string.
@@ -101,12 +179,12 @@ class MCPToolWrapperGenerator:
             A string containing the complete Python function definition
         """
         params_str, arg_props = self._extract_function_signature(tool)
-        description = tool.description if hasattr(tool, 'description') and tool.description else ""
+        docstring = self._generate_docstring(tool)
         arguments_section = self._generate_arguments_section(arg_props, indent=4)
 
         func_body = f'''async def {tool.name}({params_str}) -> Any:
     """
-    {description}
+    {docstring}
     """
     session = await _connection_manager.get_session()
     {arguments_section}

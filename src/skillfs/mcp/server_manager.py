@@ -39,7 +39,7 @@ class MCPServerManager:
         command: str,
         args: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = None
-    ) -> List[Any]:
+    ) -> tuple[List[Any], Optional[str]]:
         """
         Fetch available tools from an MCP server.
 
@@ -50,7 +50,7 @@ class MCPServerManager:
             env: Optional environment variables
 
         Returns:
-            List of tool definitions from the server
+            Tuple of (tools list, server instructions or None)
 
         Raises:
             Exception: If unable to connect to or list tools from the server
@@ -64,10 +64,15 @@ class MCPServerManager:
         )
 
         tools = []
+        instructions = None
         try:
             async with stdio_client(params) as (read, write):
                 async with ClientSession(read, write) as session:
-                    await session.initialize()
+                    init_result = await session.initialize()
+                    # Extract server-provided instructions for LLMs
+                    if hasattr(init_result, 'instructions') and init_result.instructions:
+                        instructions = init_result.instructions
+                        logger.info(f"Server {server_name} provided instructions")
                     result = await session.list_tools()
                     tools = result.tools if hasattr(result, 'tools') else []
                     logger.info(f"Found {len(tools)} tools in {server_name}")
@@ -75,7 +80,7 @@ class MCPServerManager:
             logger.error(f"Failed to fetch tools from {server_name}: {e}")
             raise
 
-        return tools
+        return tools, instructions
 
     def _normalize_server_name(self, server_name: str) -> str:
         """Normalize server name to be a valid Python identifier.
@@ -105,7 +110,8 @@ class MCPServerManager:
         self,
         server_name: str,
         tools: List[Any],
-        server_config: Dict[str, Any]
+        server_config: Dict[str, Any],
+        instructions: Optional[str] = None
     ) -> Path:
         """
         Generate a directory with tool wrapper files for an MCP server.
@@ -121,6 +127,7 @@ class MCPServerManager:
             server_name: Name of the MCP server
             tools: List of tool definitions
             server_config: Server configuration with 'command', 'args', 'env'
+            instructions: Optional server-provided instructions for LLMs
 
         Returns:
             Path to the generated server directory
@@ -167,7 +174,7 @@ class MCPServerManager:
 
         # Create SKILL.md with frontmatter
         skill_file = server_dir / "SKILL.md"
-        skill_content = self._create_skill_md(server_name, normalized_name, tools)
+        skill_content = self._create_skill_md(server_name, normalized_name, tools, instructions)
         skill_file.write_text(skill_content)
         logger.info(f"Created SKILL.md: {skill_file}")
 
@@ -242,26 +249,43 @@ __all__ = [{all_exports_str}]
         self,
         server_name: str,
         normalized_name: str,
-        tools: List[Any]
+        tools: List[Any],
+        instructions: Optional[str] = None
     ) -> str:
         """
         Create SKILL.md content with YAML frontmatter.
+
+        Tools are linked to their implementation files for progressive disclosure.
 
         Args:
             server_name: Original server name
             normalized_name: Python-safe normalized name
             tools: List of tool definitions
+            instructions: Optional server-provided instructions for LLMs
 
         Returns:
             Content for SKILL.md file
         """
-        tool_names = [
-            tool.name if hasattr(tool, 'name') else str(tool)
-            for tool in tools
-        ]
+        # Build tool list with links to implementation files and descriptions
+        tool_entries = []
+        for tool in tools:
+            tool_name = tool.name if hasattr(tool, 'name') else str(tool)
+            description = tool.description if hasattr(tool, 'description') and tool.description else ''
+            # Link to the tool's Python file for progressive disclosure
+            tool_entries.append(f"- [`{tool_name}`](tools/{tool_name}.py): {description}")
 
-        # Build tool list for the body
-        tool_list = "\n".join([f"- `{name}`" for name in tool_names])
+        tool_list = "\n".join(tool_entries)
+
+        first_tool = tools[0].name if tools and hasattr(tools[0], 'name') else 'tool_name'
+
+        # Build instructions section only if provided
+        instructions_section = ""
+        if instructions:
+            instructions_section = f"""
+## Recommended Instructions Derived from the Server
+
+> {instructions}
+"""
 
         return f'''---
 name: {normalized_name}
@@ -280,18 +304,18 @@ This skill provides tools from the `{server_name}` MCP server.
 
 ```python
 from src.servers.{normalized_name} import connect_{normalized_name}, disconnect_{normalized_name}
-from src.servers.{normalized_name}.tools import {tool_names[0] if tool_names else 'tool_name'}
+from src.servers.{normalized_name}.tools import {first_tool}
 
 # Connect to the server first
 await connect_{normalized_name}()
 
 # Use the tools
-result = await {tool_names[0] if tool_names else 'tool_name'}(...)
+result = await {first_tool}(...)
 
 # Disconnect when done
 await disconnect_{normalized_name}()
 ```
-'''
+{instructions_section}'''
 
     def _create_init_file(
         self,
@@ -394,8 +418,8 @@ __all__ = [{all_exports_str}]
         if not command:
             raise ValueError(f"Server config for {server_name} must include 'command'")
 
-        # Fetch tools from the server
-        tools = await self.fetch_tools_from_server(
+        # Fetch tools and instructions from the server
+        tools, instructions = await self.fetch_tools_from_server(
             server_name=server_name,
             command=command,
             args=args,
@@ -407,6 +431,7 @@ __all__ = [{all_exports_str}]
             server_name=server_name,
             tools=tools,
             server_config=server_config,
+            instructions=instructions,
         )
 
         return server_dir
