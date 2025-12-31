@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from skillfs.constants import DEFAULT_REPO_ROOT
 from skillfs.agents.persistence import load_agent_state, save_agent_state
@@ -55,6 +55,8 @@ class Agent:
         repo_root: str = DEFAULT_REPO_ROOT,
         mcp_servers: Optional[Dict[str, Dict[str, Any]]] = None,
         generate_mcp_tools: bool = False,
+        skills: Optional[Dict[str, Any]] = None,
+        load_skills: bool = False,
     ):
         """Initialize agent instance.
 
@@ -67,6 +69,10 @@ class Agent:
                         Format: {"server-name": {"command": "...", "args": [...], "env": {...}}}
             generate_mcp_tools: If True, generate MCP tool wrappers during load.
                                If False, MCP servers are ignored.
+            skills: Optional skills configuration.
+                   Format: {"local": "/path/to/skills" or ["/path1", "/path2"]}
+            load_skills: If True, load skills from configured sources during load.
+                        If False, skills config is ignored. 
         """
         self.agent_id = agent_id
         self.sandbox = sandbox
@@ -74,6 +80,8 @@ class Agent:
         self.repo_root = repo_root
         self.mcp_servers = mcp_servers or {}
         self.generate_mcp_tools = generate_mcp_tools
+        self.skills = skills or {}
+        self.load_skills = load_skills
         self.git_repo: Optional[GitRepo] = None
         self._is_loaded = False
 
@@ -110,6 +118,10 @@ class Agent:
         # Setup MCP servers if flag is enabled
         if self.generate_mcp_tools and self.mcp_servers:
             await self.setup_mcp_servers(self.mcp_servers)
+
+        # Setup skills if flag is enabled
+        if self.load_skills and self.skills:
+            await self.setup_skills(self.skills)
 
         self._is_loaded = True
         logger.info(f"Agent {self.agent_id} loaded successfully")
@@ -211,6 +223,176 @@ class Agent:
 
             logger.info(f"Successfully setup {len(results)} MCP servers in sandbox")
             return results
+
+    async def setup_skills(
+        self, skills_config: Dict[str, Any]
+    ) -> Dict[str, Path]:
+        """Setup skills by uploading skill folders to the sandbox.
+
+        This method processes skill sources from the configuration and uploads
+        contents to the src/skills/ directory within the agent's repository.
+
+        The provided path should be a directory CONTAINING skill folders. Each
+        subdirectory within the path is treated as a skill and uploaded to
+        src/skills/<skill_name>/. Top-level files (e.g., README.md, SKILL.md)
+        are also uploaded to src/skills/.
+
+        Args:
+            skills_config: Dictionary with skill source configurations.
+                          Currently supports: {"local": "/path" or ["/path1", "/path2"]}
+
+        Returns:
+            Dictionary mapping skill/file names to their sandbox paths.
+
+        Raises:
+            RuntimeError: If git repo is not initialized.
+
+        Example:
+            >>> # Given directory structure:
+            >>> # /path/to/skills/
+            >>> # ├── README.md          <- uploaded to src/skills/README.md
+            >>> # ├── checkout_flow/     <- uploaded to src/skills/checkout_flow/
+            >>> # │   └── SKILL.md
+            >>> # └── data_extraction/   <- uploaded to src/skills/data_extraction/
+            >>> #     └── SKILL.md
+            >>> skills = {"local": "/path/to/skills"}
+            >>> await agent.setup_skills(skills)
+        """
+        if self.git_repo is None:
+            raise RuntimeError(
+                f"Agent {self.agent_id} repository not initialized. Call load() first."
+            )
+
+        import asyncio
+
+        # Common artifacts to filter out
+        FILTERED_ITEMS = {
+            ".DS_Store",
+            "Thumbs.db",
+            "__pycache__",
+            ".git",
+            ".gitignore",
+            ".pytest_cache",
+        }
+
+        sandbox_skills_base = f"{self.repo_root}/src/skills"
+
+        # Track which items come from which paths (for collision logging)
+        # Separate tracking for folders and files
+        skill_folder_sources: Dict[str, List[str]] = {}
+        file_sources: Dict[str, List[str]] = {}
+        # Track which items we've already uploaded (first-wins)
+        uploaded_items: Dict[str, Path] = {}
+
+        # Normalize local paths to a list
+        local_paths: List[str] = []
+        if "local" in skills_config:
+            local_value = skills_config["local"]
+            if isinstance(local_value, str):
+                local_paths = [local_value]
+            elif isinstance(local_value, list):
+                local_paths = local_value
+
+        logger.info(f"Setting up skills from {len(local_paths)} local path(s)")
+
+        dir_upload_tasks: List[Any] = []
+        file_upload_tasks: List[tuple[Path, str]] = []
+
+        for source_path_str in local_paths:
+            source_path = Path(source_path_str)
+
+            # Check if path exists
+            if not source_path.exists():
+                logger.warning(f"Skills path '{source_path}' does not exist, skipping")
+                continue
+
+            if not source_path.is_dir():
+                logger.warning(f"Skills path '{source_path}' is not a directory, skipping")
+                continue
+
+            # Iterate through all items in the source directory
+            for item in source_path.iterdir():
+                # Skip filtered items
+                if item.name in FILTERED_ITEMS:
+                    continue
+
+                item_name = item.name
+
+                if item.is_dir():
+                    # Handle skill folders
+                    if item_name not in skill_folder_sources:
+                        skill_folder_sources[item_name] = []
+                    skill_folder_sources[item_name].append(str(source_path))
+
+                    # First-wins: skip if already uploaded
+                    if item_name in uploaded_items:
+                        continue
+
+                    # Check if skill folder is empty (after filtering)
+                    skill_contents = [
+                        f for f in item.iterdir()
+                        if f.name not in FILTERED_ITEMS
+                    ]
+                    if not skill_contents:
+                        logger.info(f"Skill folder '{item_name}' is empty, skipping")
+                        continue
+
+                    # Queue directory upload
+                    remote_dir = f"{sandbox_skills_base}/{item_name}"
+                    dir_upload_tasks.append(self.sandbox.upload_directory(item, remote_dir))
+                    uploaded_items[item_name] = Path(remote_dir)
+
+                elif item.is_file():
+                    # Handle top-level files
+                    if item_name not in file_sources:
+                        file_sources[item_name] = []
+                    file_sources[item_name].append(str(source_path))
+
+                    # First-wins: skip if already uploaded
+                    if item_name in uploaded_items:
+                        continue
+
+                    # Queue file upload (store paths for async upload later)
+                    remote_path = f"{sandbox_skills_base}/{item_name}"
+                    file_upload_tasks.append((item, remote_path))
+                    uploaded_items[item_name] = Path(remote_path)
+
+        # Helper for async file upload
+        async def upload_file_async(local_file: Path, remote_file: str) -> None:
+            await asyncio.to_thread(self.sandbox.upload_file, local_file, remote_file)
+
+        # Execute all uploads in parallel
+        all_tasks = dir_upload_tasks + [
+            upload_file_async(local_file, remote_file)
+            for local_file, remote_file in file_upload_tasks
+        ]
+        if all_tasks:
+            await asyncio.gather(*all_tasks)
+
+        # Log collision summary for skill folders
+        for skill_name, sources in skill_folder_sources.items():
+            if len(sources) > 1:
+                used = sources[0]
+                skipped = sources[1:]
+                logger.info(
+                    f"Skill '{skill_name}' found in {len(sources)} locations: "
+                    f"{used} (used), {', '.join(skipped)} (skipped)"
+                )
+
+        # Log collision summary for files
+        for file_name, sources in file_sources.items():
+            if len(sources) > 1:
+                used = sources[0]
+                skipped = sources[1:]
+                logger.info(
+                    f"File '{file_name}' found in {len(sources)} locations: "
+                    f"{used} (used), {', '.join(skipped)} (skipped)"
+                )
+
+        num_folders = len([k for k in uploaded_items if k in skill_folder_sources])
+        num_files = len([k for k in uploaded_items if k in file_sources])
+        logger.info(f"Successfully setup {num_folders} skill(s) and {num_files} file(s) in sandbox")
+        return uploaded_items
 
     def run_command(
         self, command: str, cwd: Optional[str] = None
