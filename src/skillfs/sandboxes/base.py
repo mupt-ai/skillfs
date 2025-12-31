@@ -143,25 +143,41 @@ class SandboxConnection(ABC):
         """Terminate and cleanup the sandbox instance."""
         pass
 
-    async def upload_directory(self, local_dir: Path, remote_dir: str) -> None:
+    async def upload_directory(
+        self,
+        local_dir: Path,
+        remote_dir: str,
+        exclude: Optional[set[str]] = None,
+    ) -> None:
         """Upload a directory recursively to the sandbox with parallel file uploads.
 
         Args:
             local_dir: Local directory path to upload
             remote_dir: Remote path in sandbox where directory should be uploaded
+            exclude: Optional set of file/directory names to exclude at all levels
+                    (e.g., {".git", "__pycache__", ".DS_Store"})
 
         Raises:
             RuntimeError: If directory creation or file upload fails
         """
+        exclude = exclude or set()
+
         # Create the remote directory
         result = self.run_command(f"mkdir -p {remote_dir}")
         if result.exit_code != 0:
             raise RuntimeError(f"Failed to create remote directory {remote_dir}: {result.error}")
 
-        # Collect all files to upload
+        # Collect all files to upload, filtering excluded items
         upload_tasks = []
-        for root, _, files in os.walk(local_dir):
+        for root, dirs, files in os.walk(local_dir):
+            # Filter out excluded directories in-place (prevents os.walk from descending)
+            dirs[:] = [d for d in dirs if d not in exclude]
+
             for file in files:
+                # Skip excluded files
+                if file in exclude:
+                    continue
+
                 local_file = Path(root) / file
                 # Calculate relative path from local_dir
                 rel_path = local_file.relative_to(local_dir)

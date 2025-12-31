@@ -337,9 +337,11 @@ class Agent:
                         logger.info(f"Skill folder '{item_name}' is empty, skipping")
                         continue
 
-                    # Queue directory upload
+                    # Queue directory upload with filtering
                     remote_dir = f"{sandbox_skills_base}/{item_name}"
-                    dir_upload_tasks.append(self.sandbox.upload_directory(item, remote_dir))
+                    dir_upload_tasks.append(
+                        self.sandbox.upload_directory(item, remote_dir, exclude=FILTERED_ITEMS)
+                    )
                     uploaded_items[item_name] = Path(remote_dir)
 
                 elif item.is_file():
