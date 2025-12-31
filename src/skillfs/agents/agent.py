@@ -1,6 +1,8 @@
 """Agent class for managing persistent agent state."""
 
 import logging
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -239,7 +241,10 @@ class Agent:
 
         Args:
             skills_config: Dictionary with skill source configurations.
-                          Currently supports: {"local": "/path" or ["/path1", "/path2"]}
+                          Supports:
+                          - {"local": "/path" or ["/path1", "/path2"]}
+                          - {"github": "url" or ["url1", "url2"]}
+                          Local paths are processed first (take precedence over github).
 
         Returns:
             Dictionary mapping skill/file names to their sandbox paths.
@@ -248,14 +253,19 @@ class Agent:
             RuntimeError: If git repo is not initialized.
 
         Example:
-            >>> # Given directory structure:
-            >>> # /path/to/skills/
-            >>> # ├── README.md          <- uploaded to src/skills/README.md
-            >>> # ├── checkout_flow/     <- uploaded to src/skills/checkout_flow/
-            >>> # │   └── SKILL.md
-            >>> # └── data_extraction/   <- uploaded to src/skills/data_extraction/
-            >>> #     └── SKILL.md
+            >>> # Local skills
             >>> skills = {"local": "/path/to/skills"}
+            >>> await agent.setup_skills(skills)
+            >>>
+            >>> # GitHub skills
+            >>> skills = {"github": "https://github.com/user/skills-repo"}
+            >>> await agent.setup_skills(skills)
+            >>>
+            >>> # Combined (local takes precedence)
+            >>> skills = {
+            ...     "local": "/path/to/skills",
+            ...     "github": "https://github.com/user/skills-repo"
+            ... }
             >>> await agent.setup_skills(skills)
         """
         if self.git_repo is None:
@@ -293,24 +303,23 @@ class Agent:
             elif isinstance(local_value, list):
                 local_paths = local_value
 
-        logger.info(f"Setting up skills from {len(local_paths)} local path(s)")
+        # Normalize github URLs to a list
+        github_urls: List[str] = []
+        if "github" in skills_config:
+            github_value = skills_config["github"]
+            if isinstance(github_value, str):
+                github_urls = [github_value]
+            elif isinstance(github_value, list):
+                github_urls = github_value
+
+        logger.info(f"Setting up skills from {len(local_paths)} local path(s) and {len(github_urls)} github repo(s)")
 
         dir_upload_tasks: List[Any] = []
         file_upload_tasks: List[tuple[Path, str]] = []
 
-        for source_path_str in local_paths:
-            source_path = Path(source_path_str)
-
-            # Check if path exists
-            if not source_path.exists():
-                logger.warning(f"Skills path '{source_path}' does not exist, skipping")
-                continue
-
-            if not source_path.is_dir():
-                logger.warning(f"Skills path '{source_path}' is not a directory, skipping")
-                continue
-
-            # Iterate through all items in the source directory
+        # Helper to process a source directory (shared between local and github)
+        def process_source_directory(source_path: Path, source_label: str) -> None:
+            """Process a directory containing skill folders and files."""
             for item in source_path.iterdir():
                 # Skip filtered items
                 if item.name in FILTERED_ITEMS:
@@ -322,7 +331,7 @@ class Agent:
                     # Handle skill folders
                     if item_name not in skill_folder_sources:
                         skill_folder_sources[item_name] = []
-                    skill_folder_sources[item_name].append(str(source_path))
+                    skill_folder_sources[item_name].append(source_label)
 
                     # First-wins: skip if already uploaded
                     if item_name in uploaded_items:
@@ -348,7 +357,7 @@ class Agent:
                     # Handle top-level files
                     if item_name not in file_sources:
                         file_sources[item_name] = []
-                    file_sources[item_name].append(str(source_path))
+                    file_sources[item_name].append(source_label)
 
                     # First-wins: skip if already uploaded
                     if item_name in uploaded_items:
@@ -358,6 +367,48 @@ class Agent:
                     remote_path = f"{sandbox_skills_base}/{item_name}"
                     file_upload_tasks.append((item, remote_path))
                     uploaded_items[item_name] = Path(remote_path)
+
+        # Process local paths first (they take precedence)
+        for source_path_str in local_paths:
+            source_path = Path(source_path_str)
+
+            if not source_path.exists():
+                logger.warning(f"Skills path '{source_path}' does not exist, skipping")
+                continue
+
+            if not source_path.is_dir():
+                logger.warning(f"Skills path '{source_path}' is not a directory, skipping")
+                continue
+
+            process_source_directory(source_path, str(source_path))
+
+        # Process GitHub repos 
+        temp_dirs: List[tempfile.TemporaryDirectory] = []
+        for github_url in github_urls:
+            # Create temp directory for cloning
+            temp_dir = tempfile.TemporaryDirectory()
+            temp_dirs.append(temp_dir)
+            clone_path = Path(temp_dir.name)
+
+            logger.info(f"Cloning {github_url} to temp directory")
+            try:
+                result = subprocess.run(
+                    ["git", "clone", "--depth", "1", github_url, str(clone_path)],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                if result.returncode != 0:
+                    logger.warning(f"Failed to clone {github_url}: {result.stderr}")
+                    continue
+            except subprocess.TimeoutExpired:
+                logger.warning(f"Timeout cloning {github_url}, skipping")
+                continue
+            except Exception as e:
+                logger.warning(f"Error cloning {github_url}: {e}")
+                continue
+
+            process_source_directory(clone_path, github_url)
 
         # Helper for async file upload
         async def upload_file_async(local_file: Path, remote_file: str) -> None:
@@ -370,6 +421,10 @@ class Agent:
         ]
         if all_tasks:
             await asyncio.gather(*all_tasks)
+
+        # Cleanup temp directories from GitHub clones
+        for temp_dir in temp_dirs:
+            temp_dir.cleanup()
 
         # Log collision summary for skill folders
         for skill_name, sources in skill_folder_sources.items():
