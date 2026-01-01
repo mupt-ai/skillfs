@@ -243,8 +243,17 @@ class Agent:
             skills_config: Dictionary with skill source configurations.
                           Supports:
                           - {"local": "/path" or ["/path1", "/path2"]}
-                          - {"github": "url" or ["url1", "url2"]}
-                          Local paths are processed first (take precedence over github).
+                          - {"github": "url" or ["url1", "url2"] or {"url": ..., "ref": ..., "path": ...}}
+
+                          GitHub options:
+                          - url: Repository URL (required)
+                          - ref: Branch, tag, or commit to clone (optional)
+                          - path: Subfolder within repo to use (optional)
+
+                          Local paths: each subdirectory becomes a skill folder.
+                          GitHub: the repo (or subfolder) becomes a skill folder named after
+                          the repo or the last segment of path.
+                          Local paths take precedence over github.
 
         Returns:
             Dictionary mapping skill/file names to their sandbox paths.
@@ -253,19 +262,20 @@ class Agent:
             RuntimeError: If git repo is not initialized.
 
         Example:
-            >>> # Local skills
+            >>> # Local skills (each subdirectory becomes a skill)
             >>> skills = {"local": "/path/to/skills"}
             >>> await agent.setup_skills(skills)
             >>>
-            >>> # GitHub skills
+            >>> # GitHub (repo becomes skills/skills-repo/)
             >>> skills = {"github": "https://github.com/user/skills-repo"}
             >>> await agent.setup_skills(skills)
             >>>
-            >>> # Combined (local takes precedence)
-            >>> skills = {
-            ...     "local": "/path/to/skills",
-            ...     "github": "https://github.com/user/skills-repo"
-            ... }
+            >>> # GitHub with ref and path (becomes skills/browser/)
+            >>> skills = {"github": {
+            ...     "url": "https://github.com/user/plugins",
+            ...     "ref": "main",
+            ...     "path": "skills/browser"
+            ... }}
             >>> await agent.setup_skills(skills)
         """
         if self.git_repo is None:
@@ -293,6 +303,8 @@ class Agent:
         file_sources: Dict[str, List[str]] = {}
         # Track which items we've already uploaded (first-wins)
         uploaded_items: Dict[str, Path] = {}
+        # Track which source actually uploaded each item (for accurate collision logging)
+        uploaded_by: Dict[str, str] = {}
 
         # Normalize local paths to a list
         local_paths: List[str] = []
@@ -303,16 +315,22 @@ class Agent:
             elif isinstance(local_value, list):
                 local_paths = local_value
 
-        # Normalize github URLs to a list
-        github_urls: List[str] = []
+        # Normalize github configs to a list of dicts
+        github_configs: List[Dict[str, str]] = []
         if "github" in skills_config:
             github_value = skills_config["github"]
             if isinstance(github_value, str):
-                github_urls = [github_value]
+                github_configs = [{"url": github_value}]
+            elif isinstance(github_value, dict):
+                github_configs = [github_value]
             elif isinstance(github_value, list):
-                github_urls = github_value
+                for item in github_value:
+                    if isinstance(item, str):
+                        github_configs.append({"url": item})
+                    elif isinstance(item, dict):
+                        github_configs.append(item)
 
-        logger.info(f"Setting up skills from {len(local_paths)} local path(s) and {len(github_urls)} github repo(s)")
+        logger.info(f"Setting up skills from {len(local_paths)} local path(s) and {len(github_configs)} github repo(s)")
 
         dir_upload_tasks: List[Any] = []
         file_upload_tasks: List[tuple[Path, str]] = []
@@ -352,6 +370,7 @@ class Agent:
                         self.sandbox.upload_directory(item, remote_dir, exclude=FILTERED_ITEMS)
                     )
                     uploaded_items[item_name] = Path(remote_dir)
+                    uploaded_by[item_name] = source_label
 
                 elif item.is_file():
                     # Handle top-level files
@@ -367,6 +386,7 @@ class Agent:
                     remote_path = f"{sandbox_skills_base}/{item_name}"
                     file_upload_tasks.append((item, remote_path))
                     uploaded_items[item_name] = Path(remote_path)
+                    uploaded_by[item_name] = source_label
 
         # Process local paths first (they take precedence)
         for source_path_str in local_paths:
@@ -382,33 +402,91 @@ class Agent:
 
             process_source_directory(source_path, str(source_path))
 
-        # Process GitHub repos 
+        # Helper to extract repo name from GitHub URL
+        def get_repo_name(url: str) -> str:
+            """Extract repository name from GitHub URL."""
+            url = url.rstrip("/")
+            if url.endswith(".git"):
+                url = url[:-4]
+            return url.split("/")[-1]
+
+        # Process GitHub repos (each repo/subfolder becomes a skill folder)
         temp_dirs: List[tempfile.TemporaryDirectory] = []
-        for github_url in github_urls:
+        for github_config in github_configs:
+            url = github_config.get("url") or ""
+            ref = github_config.get("ref")  # Optional branch/tag/commit
+            subpath = (github_config.get("path") or "").strip("/")  # Optional subfolder
+
+            if not url:
+                logger.warning("GitHub config missing 'url', skipping")
+                continue
+
+            # Skill folder name: last segment of path if specified, else repo name
+            if subpath:
+                skill_name = subpath.split("/")[-1]
+            else:
+                skill_name = get_repo_name(url)
+
             # Create temp directory for cloning
             temp_dir = tempfile.TemporaryDirectory()
             temp_dirs.append(temp_dir)
             clone_path = Path(temp_dir.name)
 
-            logger.info(f"Cloning {github_url} to temp directory")
+            # Build git clone command
+            clone_cmd = ["git", "clone", "--depth", "1"]
+            if ref:
+                clone_cmd.extend(["--branch", ref])
+            clone_cmd.extend([url, str(clone_path)])
+
+            logger.info(f"Cloning {url}" + (f" (ref: {ref})" if ref else "") + " to temp directory")
             try:
                 result = subprocess.run(
-                    ["git", "clone", "--depth", "1", github_url, str(clone_path)],
+                    clone_cmd,
                     capture_output=True,
                     text=True,
                     timeout=120,
                 )
                 if result.returncode != 0:
-                    logger.warning(f"Failed to clone {github_url}: {result.stderr}")
+                    logger.warning(f"Failed to clone {url}: {result.stderr}")
                     continue
             except subprocess.TimeoutExpired:
-                logger.warning(f"Timeout cloning {github_url}, skipping")
+                logger.warning(f"Timeout cloning {url}, skipping")
                 continue
             except Exception as e:
-                logger.warning(f"Error cloning {github_url}: {e}")
+                logger.warning(f"Error cloning {url}: {e}")
                 continue
 
-            process_source_directory(clone_path, github_url)
+            # Determine source path (whole repo or subfolder)
+            source_path = clone_path / subpath if subpath else clone_path
+            if not source_path.exists() or not source_path.is_dir():
+                logger.warning(f"Path '{subpath}' not found in {url}, skipping")
+                continue
+
+            # Track collision for skill name
+            if skill_name not in skill_folder_sources:
+                skill_folder_sources[skill_name] = []
+            skill_folder_sources[skill_name].append(url + (f":{subpath}" if subpath else ""))
+
+            # First-wins: skip if already uploaded
+            if skill_name in uploaded_items:
+                continue
+
+            # Check if source is empty (after filtering)
+            source_contents = [
+                f for f in source_path.iterdir()
+                if f.name not in FILTERED_ITEMS
+            ]
+            if not source_contents:
+                logger.info(f"GitHub skill '{skill_name}' is empty, skipping")
+                continue
+
+            # Upload as a skill folder
+            remote_dir = f"{sandbox_skills_base}/{skill_name}"
+            dir_upload_tasks.append(
+                self.sandbox.upload_directory(source_path, remote_dir, exclude=FILTERED_ITEMS)
+            )
+            uploaded_items[skill_name] = Path(remote_dir)
+            uploaded_by[skill_name] = url + (f":{subpath}" if subpath else "")
 
         # Helper for async file upload
         async def upload_file_async(local_file: Path, remote_file: str) -> None:
@@ -428,9 +506,9 @@ class Agent:
 
         # Log collision summary for skill folders
         for skill_name, sources in skill_folder_sources.items():
-            if len(sources) > 1:
-                used = sources[0]
-                skipped = sources[1:]
+            if len(sources) > 1 and skill_name in uploaded_by:
+                used = uploaded_by[skill_name]
+                skipped = [s for s in sources if s != used]
                 logger.info(
                     f"Skill '{skill_name}' found in {len(sources)} locations: "
                     f"{used} (used), {', '.join(skipped)} (skipped)"
@@ -438,9 +516,9 @@ class Agent:
 
         # Log collision summary for files
         for file_name, sources in file_sources.items():
-            if len(sources) > 1:
-                used = sources[0]
-                skipped = sources[1:]
+            if len(sources) > 1 and file_name in uploaded_by:
+                used = uploaded_by[file_name]
+                skipped = [s for s in sources if s != used]
                 logger.info(
                     f"File '{file_name}' found in {len(sources)} locations: "
                     f"{used} (used), {', '.join(skipped)} (skipped)"
