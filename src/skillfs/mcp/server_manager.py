@@ -266,13 +266,12 @@ __all__ = [{all_exports_str}]
         Returns:
             Content for SKILL.md file
         """
-        # Build tool list with links to implementation files and descriptions
+        # Build tool list with links to implementation files
         tool_entries = []
         for tool in tools:
             tool_name = tool.name if hasattr(tool, 'name') else str(tool)
-            description = tool.description if hasattr(tool, 'description') and tool.description else ''
             # Link to the tool's Python file for progressive disclosure
-            tool_entries.append(f"- [`{tool_name}`](tools/{tool_name}.py): {description}")
+            tool_entries.append(f"- [`{tool_name}`](tools/{tool_name}.py)")
 
         tool_list = "\n".join(tool_entries)
 
