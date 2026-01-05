@@ -12,6 +12,7 @@ from skillfs.sandboxes.base import (
     SandboxConnection,
     SandboxConfig,
     ExecutionResult,
+    GrepMatch,
 )
 
 # Load environment variables for E2B API key
@@ -79,6 +80,9 @@ class E2BSandbox(SandboxConnection):
         )
 
         instance._is_alive = True
+
+        # Install ripgrep for grep operations
+        instance._sandbox.commands.run("sudo apt-get install -y ripgrep")
 
         return instance
 
