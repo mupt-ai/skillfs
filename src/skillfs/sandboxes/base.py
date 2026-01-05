@@ -28,6 +28,23 @@ class ExecutionResult:
     """Process exit code if applicable."""
 
 
+@dataclass(frozen=True)
+class GrepMatch:
+    """A single match from a grep search."""
+
+    path: str
+    """Absolute path to the file containing the match."""
+
+    line: int
+    """Line number (1-based)."""
+
+    text: str
+    """The matching line content."""
+
+    column: Optional[int] = None
+    """Column number of match start (1-based), if available."""
+
+
 @dataclass
 class SandboxConfig:
     """Configuration for sandbox creation and lifecycle."""
@@ -122,6 +139,124 @@ class SandboxConnection(ABC):
 
         Returns:
             List of file paths.
+        """
+        pass
+
+    @abstractmethod
+    def read_file_bytes(self, path: str, max_bytes: Optional[int] = None) -> bytes:
+        """Read file contents as bytes from the sandbox filesystem.
+
+        Note: Backends may enforce max_bytes either during transfer (preferred)
+        or by truncating after read.
+
+        Args:
+            path: Absolute path to file in sandbox.
+            max_bytes: Maximum bytes to read (safety limit). None for no limit.
+
+        Returns:
+            File contents as bytes.
+
+        Raises:
+            FileNotFoundError: If file doesn't exist.
+            RuntimeError: If sandbox is not alive.
+        """
+        pass
+
+    def read_file_text(
+        self,
+        path: str,
+        encoding: str = "utf-8",
+        errors: str = "strict",
+        max_bytes: Optional[int] = None,
+    ) -> str:
+        """Read file contents as text from the sandbox filesystem.
+
+        Convenience wrapper around read_file_bytes that decodes to string.
+
+        Args:
+            path: Absolute path to file in sandbox.
+            encoding: Text encoding (default: utf-8).
+            errors: How to handle decode errors:
+                - "strict": raise on invalid bytes (default, good for source files)
+                - "replace": substitute invalid bytes with replacement char
+                - "ignore": drop invalid bytes (rarely what you want)
+            max_bytes: Maximum bytes to read (safety limit). None for no limit.
+
+        Returns:
+            File contents as string.
+        """
+        return self.read_file_bytes(path, max_bytes).decode(encoding, errors=errors)
+
+    @abstractmethod
+    def glob(
+        self,
+        pattern: str,
+        root: str = ".",
+        *,
+        absolute: bool = True,
+        dot: bool = False,
+        follow_symlinks: bool = False,
+        max_results: Optional[int] = None,
+    ) -> List[str]:
+        """Find files matching a glob pattern.
+
+        Semantics:
+        - `root` is the base directory to search under
+        - `pattern` is interpreted relative to `root`
+        - Relative `root` (e.g., ".") is resolved against the sandbox's workspace root
+        - Example: glob("**/*.md", root="/repo/src") searches /repo/src/**/*.md
+        - Supports ** for recursive matching
+        - Does NOT support {a,b} brace expansion
+        - If dot=False, paths with any segment starting with . are excluded
+          unless the pattern segment explicitly starts with .
+        - If dot=True, hidden files/dirs are eligible for matching and traversal
+        - Results are sorted lexicographically, then truncated if max_results set
+
+        Args:
+            pattern: Glob pattern (e.g., "*.py", "**/*.md", "SKILL.md").
+            root: Base directory to search from. Relative paths resolved to workspace root.
+            absolute: Whether to return absolute paths (default: True).
+            dot: Whether to match dotfiles/directories (default: False).
+            follow_symlinks: Whether to follow symlinks (default: False).
+            max_results: Maximum results to return (truncated after sorting).
+
+        Returns:
+            List of matching file paths, sorted lexicographically.
+        """
+        pass
+
+    @abstractmethod
+    def grep(
+        self,
+        pattern: str,
+        path: str = ".",
+        *,
+        include: Optional[str] = None,
+        ignore_case: bool = False,
+        regex: bool = True,
+        max_results: Optional[int] = None,
+    ) -> List[GrepMatch]:
+        """Search file contents for a pattern.
+
+        Semantics:
+        - If `path` is a file: search only that file (include is ignored)
+        - If `path` is a directory: search recursively under it
+        - Relative `path` (e.g., ".") is resolved against the sandbox's workspace root
+        - `include` filters files by path relative to `path` (e.g., "**/*.py")
+        - Results are ordered by (path, line, column) for determinism
+          - column=None is treated as 0 for sorting purposes
+        - If max_results set, all matches are gathered, sorted, then truncated to first N
+
+        Args:
+            pattern: Pattern to search for (regex or literal depending on `regex` flag).
+            path: File or directory to search in. Relative paths resolved to workspace root.
+            include: Glob pattern to filter files, matched against path relative to `path`.
+            ignore_case: Whether to ignore case in pattern matching.
+            regex: If True, treat pattern as regex. If False, treat as literal string.
+            max_results: Maximum matches to return (truncated after sorting).
+
+        Returns:
+            List of GrepMatch objects with path, line number, and matched text.
         """
         pass
 
