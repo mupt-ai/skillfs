@@ -11,6 +11,30 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+class SandboxCommandError(RuntimeError):
+    """Error raised when a sandbox command execution fails.
+
+    Use this for distinguishing tool/sandbox failures from "no results" cases.
+    This allows callers to selectively catch and retry execution failures
+    while treating empty results as normal outcomes.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        cmd: str,
+        cwd: str,
+        exit_code: int,
+        stderr: Optional[str] = None,
+    ):
+        super().__init__(message)
+        self.cmd = cmd
+        self.cwd = cwd
+        self.exit_code = exit_code
+        self.stderr = stderr
+
+
 @dataclass
 class ExecutionResult:
     """Result of code execution in a sandbox."""
@@ -242,6 +266,11 @@ class SandboxConnection(ABC):
 
         Returns:
             List of matching file paths, sorted lexicographically.
+
+        Raises:
+            FileNotFoundError: If root directory doesn't exist.
+            ValueError: If pattern is empty or invalid.
+            SandboxCommandError: If the underlying search operation fails.
         """
         pass
 
@@ -265,6 +294,7 @@ class SandboxConnection(ABC):
         - `include` filters files by path relative to `path` (e.g., "**/*.py")
         - Results are ordered by (path, line, column) for determinism
           - column=None is treated as 0 for sorting purposes
+          - column is 1-based byte offset, not Unicode codepoint
         - If max_results set, all matches are gathered, sorted, then truncated to first N
 
         Args:
@@ -277,6 +307,11 @@ class SandboxConnection(ABC):
 
         Returns:
             List of GrepMatch objects with path, line number, and matched text.
+
+        Raises:
+            FileNotFoundError: If path doesn't exist.
+            ValueError: If pattern or include is empty or invalid.
+            SandboxCommandError: If the underlying search operation fails.
         """
         pass
 
