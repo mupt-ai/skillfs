@@ -6,7 +6,6 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from skillfs.constants import DEFAULT_REPO_ROOT
 from skillfs.agents.persistence import load_agent_state, save_agent_state
 from skillfs.repositories.git_repo import GitRepo
 from skillfs.sandboxes.base import ExecutionResult, SandboxConnection
@@ -54,7 +53,7 @@ class Agent:
         agent_id: str,
         sandbox: SandboxConnection,
         store: BundleStore,
-        repo_root: str = DEFAULT_REPO_ROOT,
+        repo_root: Optional[str] = None,
         mcp_servers: Optional[Dict[str, Dict[str, Any]]] = None,
         generate_mcp_tools: bool = False,
         skills: Optional[Dict[str, Any]] = None,
@@ -67,6 +66,7 @@ class Agent:
             sandbox: Active sandbox connection where agent operates.
             store: Storage backend for persisting agent state.
             repo_root: Path inside sandbox for the Git repository.
+                If None, uses sandbox.default_repo_root.
             mcp_servers: Optional MCP server configurations.
                         Format: {"server-name": {"command": "...", "args": [...], "env": {...}}}
             generate_mcp_tools: If True, generate MCP tool wrappers during load.
@@ -74,12 +74,12 @@ class Agent:
             skills: Optional skills configuration.
                    Format: {"local": "/path/to/skills" or ["/path1", "/path2"]}
             load_skills: If True, load skills from configured sources during load.
-                        If False, skills config is ignored. 
+                        If False, skills config is ignored.
         """
         self.agent_id = agent_id
         self.sandbox = sandbox
         self.store = store
-        self.repo_root = repo_root
+        self.repo_root = repo_root if repo_root is not None else sandbox.default_repo_root
         self.mcp_servers = mcp_servers or {}
         self.generate_mcp_tools = generate_mcp_tools
         self.skills = skills or {}

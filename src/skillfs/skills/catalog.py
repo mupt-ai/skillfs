@@ -31,19 +31,20 @@ class SkillCatalog:
     def __init__(
         self,
         sandbox: SandboxConnection,
-        repo_root: str = "/home/user/repo",
+        repo_root: Optional[str] = None,
         skill_dirs: Optional[List[str]] = None,
     ):
         """Initialize the skill catalog.
 
         Args:
             sandbox: Connection to the sandbox for file operations
-            repo_root: Root path of the repository in the sandbox
+            repo_root: Root path of the repository in the sandbox.
+                If None, uses sandbox.default_repo_root.
             skill_dirs: Directories to scan for SKILL.md files.
                        Defaults to ["src/skills", "src/servers"]
         """
         self.sandbox = sandbox
-        self.repo_root = repo_root
+        self.repo_root = repo_root if repo_root is not None else sandbox.default_repo_root
         self.skill_dirs = skill_dirs if skill_dirs is not None else DEFAULT_SKILL_DIRS.copy()
         self._skills: Dict[str, SkillMetadata] = {}
 

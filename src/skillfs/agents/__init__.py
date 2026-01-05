@@ -6,12 +6,10 @@ from skillfs.agents.persistence import (
     load_agent_state,
     save_agent_state,
 )
-from skillfs.constants import DEFAULT_REPO_ROOT
 
 __all__ = [
     "Agent",
     "load_agent_state",
     "save_agent_state",
     "BUNDLE_PATH_TEMPLATE",
-    "DEFAULT_REPO_ROOT",
 ]

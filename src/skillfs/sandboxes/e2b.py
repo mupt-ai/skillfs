@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 from e2b_code_interpreter import Sandbox
 
+from skillfs.constants import E2B_DEFAULT_REPO_ROOT
 from skillfs.sandboxes.base import (
     SandboxConnection,
     SandboxConfig,
@@ -34,6 +35,8 @@ class E2BSandbox(SandboxConnection):
         ...     print(result.logs)
         4
     """
+
+    DEFAULT_REPO_ROOT = E2B_DEFAULT_REPO_ROOT
 
     def __init__(self, config: Optional[SandboxConfig] = None):
         """Initialize E2B sandbox configuration.

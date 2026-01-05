@@ -8,13 +8,21 @@ This script demonstrates how to:
 """
 
 import asyncio
+import logging
 import os
 from pathlib import Path
 from skillfs.storage.local import LocalBundleStore
 
 import anthropic
+
+# Configure logging to see skillfs messages
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 from skillfs.agents import Agent
 from skillfs.sandboxes import E2BSandbox, SandboxConfig
+from skillfs.skills import SkillCatalog
 # import asyncio
 # sandbox = E2BSandbox.create(config=SandboxConfig(timeout=3000))
 # store = GCSBundleStore(bucket="dari_dev_test_bucket", prefix="agents/")
@@ -83,10 +91,56 @@ async def main():
             }
         },
         generate_mcp_tools=True,
+        skills={
+            "github": [
+                "https://github.com/agentskills/agentskills",
+                {
+                    "url": "https://github.com/anthropics/claude-cookbooks",
+                    "path": "skills/custom_skills/creating-financial-models"
+                },
+                {
+                    "url": "https://github.com/anthropics/claude-cookbooks",
+                    "ref": "pedram/fix-notebook-standards",
+                    "path": "skills/custom_skills/applying-brand-guidelines"
+                }
+            ]
+        },
+        load_skills=True,
     )
     await agent.load()
 
     print(f"Agent loaded: {agent}")
+
+    # Test skill catalog discovery
+    print("\n=== Testing Skill Catalog ===")
+    catalog = SkillCatalog(sandbox=sandbox)
+    num_skills = await catalog.scan()
+    print(f"Discovered {num_skills} skills")
+
+    # Print discovered skills
+    for skill in catalog.list_skills():
+        print(f"  - {skill.name}: {skill.description}")
+        if skill.short_description:
+            print(f"    (short: {skill.short_description})")
+        print(f"    location: {skill.location}")
+
+    # Print formatted tool description
+    print("\n=== Tool Description Format ===")
+    print(catalog.format_for_tool_description())
+
+    # Test loading full skill content
+    if catalog.list_skills():
+        test_skill_name = catalog.list_skills()[0].name
+        print(f"\n=== Loading Full Skill: {test_skill_name} ===")
+        full_content = catalog.get_skill(test_skill_name)
+        if full_content:
+            # Show first 500 chars to verify it loaded
+            print(f"Content length: {len(full_content)} chars")
+            print(f"Preview:\n{full_content[:500]}...")
+        else:
+            print("Failed to load skill content")
+
+    print("=== End Skill Catalog Test ===\n")
 
     # Define the tool schema for Claude
     tools = [
@@ -111,11 +165,12 @@ async def main():
     ]
 
     # System prompt that explains the agent's capabilities and context
-    system_prompt = """You are an AI assistant with access to a persistent sandbox environment through the SkillFS agent framework.
+    repo_root = agent.repo_root
+    system_prompt = f"""You are an AI assistant with access to a persistent sandbox environment through the SkillFS agent framework.
 
 ENVIRONMENT SETUP:
 - You have access to a live E2B sandbox (cloud-based Linux container)
-- The sandbox has a Git repository initialized at /home/user/repo
+- The sandbox has a Git repository initialized at {repo_root}
 - The repo is set up with uv (Python package manager) and has a virtual environment
 - MCP servers are set up and their tools are available at src/servers/
 - The skillfs package is installed and available for imports
@@ -135,7 +190,7 @@ CAPABILITIES:
 - MCP tools are available as Python modules in src/servers/
 
 WORKING DIRECTORY STRUCTURE:
-/home/user/repo/
+{repo_root}/
 ├── src/
 │   ├── skills/          # Custom agent skills/capabilities
 │   ├── servers/         # MCP server tool wrappers (e.g., playwright, browser_use)
@@ -154,16 +209,16 @@ Note: Each server has its own connect/disconnect functions (e.g., connect_playwr
 so you can use multiple MCP servers in the same script without naming conflicts.
 
 EXAMPLES:
-- List files: run_command("ls -la /home/user/repo/src/servers")
-- Run a Python script: run_command("cd /home/user/repo && uv run python my_script.py")
-- Run a module: run_command("cd /home/user/repo && uv run python -m src.skills.my_skill")
-- Add a package: run_command("cd /home/user/repo && uv add requests")
-- Test MCP server: run_command("cd /home/user/repo && uv run python -c 'from src.servers.playwright import connect_playwright; print(connect_playwright)'")
+- List files: run_command("ls -la {repo_root}/src/servers")
+- Run a Python script: run_command("cd {repo_root} && uv run python my_script.py")
+- Run a module: run_command("cd {repo_root} && uv run python -m src.skills.my_skill")
+- Add a package: run_command("cd {repo_root} && uv add requests")
+- Test MCP server: run_command("cd {repo_root} && uv run python -c 'from src.servers.playwright import connect_playwright; print(connect_playwright)'")
 
 REQUIREMENTS:
 - When you are writing new scripts, write them in skills/ and import server stuff as from src.servers.xxx import ...
 - When the user asks you to do a task which requires tools, check the servers you have access to and the skills you have access to. If you don't see the necessary tools, tell that to the user. Do not ever try to download new packages or install new packages.
-- Do things incrementally. For instance do not just write one mega script - do it in line Python first, make sure it works, and THEN save the script to skills/ 
+- Do things incrementally. For instance do not just write one mega script - do it in line Python first, make sure it works, and THEN save the script to skills/
 
 BEST PRACTICES:
 1. ALWAYS use `uv run python` to run Python code
@@ -179,7 +234,7 @@ When the session ends, all your work will be committed to the Git repo and saved
     print("\n=== Agent Ready ===")
     print("Claude has access to the sandbox environment.")
     print("Type your requests (or 'quit' to exit)\n")
-    print("System context: Persistent E2B sandbox with Git repo at /home/user/repo")
+    print(f"System context: Persistent E2B sandbox with Git repo at {repo_root}")
     print("Available: Python, Node.js, MCP servers (Playwright), run_command tool\n")
 
     while True:

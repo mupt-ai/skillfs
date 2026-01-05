@@ -75,14 +75,34 @@ class SandboxConnection(ABC):
     sandbox environments (E2B, Modal, Docker, etc.).
     """
 
-    def __init__(self, config: Optional[SandboxConfig] = None):
+    # Default repository root path. Subclasses must override with their
+    # implementation-specific default (e.g., E2BSandbox uses "/home/user/repo").
+    DEFAULT_REPO_ROOT: Optional[str] = None
+
+    def __init__(
+        self,
+        config: Optional[SandboxConfig] = None,
+        default_repo_root: Optional[str] = None,
+    ):
         """Initialize sandbox connection with optional configuration.
 
         Args:
             config: Sandbox configuration. If None, uses defaults.
+            default_repo_root: Override the default repository root path.
+                If None, uses the class-level DEFAULT_REPO_ROOT.
         """
         self.config = config or SandboxConfig()
+        self._default_repo_root = default_repo_root or self.DEFAULT_REPO_ROOT
+        if self._default_repo_root is None:
+            raise ValueError(
+                "default_repo_root must be provided (backend has no default)"
+            )
         self._is_alive = False
+
+    @property
+    def default_repo_root(self) -> str:
+        """Default repository root path for this sandbox."""
+        return self._default_repo_root
 
     @classmethod
     @abstractmethod

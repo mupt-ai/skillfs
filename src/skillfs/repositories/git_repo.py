@@ -6,7 +6,6 @@ from typing import Optional
 import uuid
 import shlex
 
-from skillfs.constants import DEFAULT_REPO_ROOT
 from skillfs.repositories.constants import (
     DEFAULT_GIT_USER_EMAIL,
     DEFAULT_GIT_USER_NAME,
@@ -35,10 +34,13 @@ class GitRepo:
     """
 
     sandbox: SandboxConnection
-    root: str = DEFAULT_REPO_ROOT
+    root: Optional[str] = None
 
     def __post_init__(self) -> None:
-        """Verify git is available in the sandbox."""
+        """Resolve root from sandbox default if not provided, verify git is available."""
+        if self.root is None:
+            self.root = self.sandbox.default_repo_root
+
         logger.debug("Checking git availability in sandbox")
         result = self.sandbox.run_command("git --version")
         if result.exit_code != 0:

@@ -60,7 +60,7 @@ async def main():
 
     # Get current working directory info
     pwd_result = agent.run_command("pwd")
-    current_dir = pwd_result.logs.strip() if pwd_result.logs else "/home/user/repo"
+    current_dir = pwd_result.logs.strip() if pwd_result.logs else agent.repo_root
     print(f"Current directory: {current_dir}\n")
 
     while True:

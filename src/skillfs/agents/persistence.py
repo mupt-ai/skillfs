@@ -12,7 +12,6 @@ from shlex import quote
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from skillfs.constants import DEFAULT_REPO_ROOT
 from skillfs.repositories.git_repo import GitRepo
 from skillfs.sandboxes.base import SandboxConnection
 from skillfs.storage.base import BundleStore
@@ -26,7 +25,7 @@ def load_agent_state(
     agent_id: str,
     sandbox: SandboxConnection,
     bundle_store: BundleStore,
-    repo_root: str = DEFAULT_REPO_ROOT,
+    repo_root: str | None = None,
 ) -> GitRepo:
     """Load agent state from cloud storage into sandbox.
 
@@ -38,7 +37,8 @@ def load_agent_state(
         agent_id: Unique identifier for the agent.
         sandbox: Active sandbox connection.
         bundle_store: Cloud storage for bundles.
-        repo_root: Path inside sandbox for the repository (default: DEFAULT_REPO_ROOT).
+        repo_root: Path inside sandbox for the repository.
+            If None, uses sandbox.default_repo_root.
 
     Returns:
         GitRepo instance connected to the restored or initialized repository.
@@ -48,8 +48,11 @@ def load_agent_state(
     """
     logger.info(f"Loading state for agent {agent_id}")
 
+    # Resolve repo_root from sandbox if not provided
+    resolved_root = repo_root if repo_root is not None else sandbox.default_repo_root
+
     # Create GitRepo instance (validates git is available)
-    git_repo = GitRepo(sandbox, root=repo_root)
+    git_repo = GitRepo(sandbox, root=resolved_root)
 
     # Try to download existing bundle from cloud storage
     with TemporaryDirectory() as tmpdir:
@@ -71,8 +74,8 @@ def load_agent_state(
                     f"Failed to create bundle directory in sandbox: {mkdir_result.error}"
                 )
 
-            # Guard: repo_root must be empty or absent before restore
-            escaped_root = shlex.quote(repo_root)
+            # Guard: resolved_root must be empty or absent before restore
+            escaped_root = shlex.quote(resolved_root)
             empty_check = (
                 f"if [ -d {escaped_root} ] && [ -n \"$(ls -A {escaped_root} 2>/dev/null)\" ]; "
                 f"then echo NONEMPTY; fi; exit 0"
@@ -84,14 +87,14 @@ def load_agent_state(
                 )
             if "NONEMPTY" in (empty_result.logs or ""):
                 raise RuntimeError(
-                    f"Cannot restore into non-empty repo_root: {repo_root}. "
+                    f"Cannot restore into non-empty repo_root: {resolved_root}. "
                     "Please provide an empty or nonexistent directory."
                 )
 
             sandbox.upload_file(local_bundle, remote_bundle)
 
             # Restore repository from bundle
-            git_repo.restore_from_bundle(remote_bundle, checkout_dir=repo_root)
+            git_repo.restore_from_bundle(remote_bundle, checkout_dir=resolved_root)
 
             logger.info("Agent state restored successfully")
         else:
