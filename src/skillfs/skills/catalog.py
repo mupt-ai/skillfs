@@ -88,14 +88,16 @@ class SkillCatalog:
             return 0
 
         # Find all SKILL.md files recursively (portable across bash/zsh)
+        # Using -print0 for null-delimited output handles edge cases (filenames with newlines)
         result = self.sandbox.run_command(
-            f"find '{directory}' -name 'SKILL.md' -type f 2>/dev/null"
+            f"find '{directory}' -name 'SKILL.md' -type f -print0 2>/dev/null"
         )
 
         if result.exit_code != 0 or not result.logs.strip():
             return 0
 
-        skill_paths = [p for p in result.logs.strip().split("\n") if p]
+        # Split on null bytes for robust parsing
+        skill_paths = [p for p in result.logs.rstrip('\0').split('\0') if p]
 
         for skill_path in skill_paths:
             metadata = await self._load_skill_metadata(skill_path)
