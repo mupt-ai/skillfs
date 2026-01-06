@@ -69,6 +69,37 @@ class GrepMatch:
     """Column number of match start (1-based), if available."""
 
 
+@dataclass(frozen=True)
+class WriteResult:
+    """Result of a file write operation."""
+
+    path: str
+    """Absolute path to the file that was written."""
+
+    bytes_written: int
+    """Number of bytes written to the file."""
+
+    created: bool
+    """True if a new file was created, False if existing file was overwritten."""
+
+
+@dataclass(frozen=True)
+class EditResult:
+    """Result of a file edit operation."""
+
+    path: str
+    """Absolute path to the file that was edited."""
+
+    replacements_made: int
+    """Number of replacements performed."""
+
+    bytes_before: int
+    """File size in bytes before editing."""
+
+    bytes_after: int
+    """File size in bytes after editing."""
+
+
 @dataclass
 class SandboxConfig:
     """Configuration for sandbox creation and lifecycle."""
@@ -312,6 +343,95 @@ class SandboxConnection(ABC):
             FileNotFoundError: If path doesn't exist.
             ValueError: If pattern or include is empty or invalid.
             SandboxCommandError: If the underlying search operation fails.
+        """
+        pass
+
+    @abstractmethod
+    def write_file(
+        self,
+        path: str,
+        content: str | bytes,
+        *,
+        create_dirs: bool = True,
+        overwrite: bool = True,
+        encoding: str = "utf-8",
+    ) -> WriteResult:
+        """Write content to a file in the sandbox filesystem.
+
+        Semantics:
+        - Relative paths are resolved against the sandbox's workspace root
+        - If content is str, it is encoded using the specified encoding
+        - If content is bytes, encoding is ignored and bytes are written directly
+        - If create_dirs=True, parent directories are created as needed
+        - If overwrite=False and file exists, raises FileExistsError
+        - If path points to an existing directory, raises IsADirectoryError
+
+        Args:
+            path: File path (absolute or relative to workspace root).
+            content: Content to write (str or bytes).
+            create_dirs: Create parent directories if they don't exist (default: True).
+            overwrite: Allow overwriting existing files (default: True).
+            encoding: Encoding to use when content is str (default: utf-8).
+
+        Returns:
+            WriteResult with path, bytes_written, and created flag.
+
+        Raises:
+            ValueError: If path is empty.
+            FileExistsError: If overwrite=False and file already exists.
+            IsADirectoryError: If path points to an existing directory.
+            RuntimeError: If sandbox is not alive or directory creation fails.
+        """
+        pass
+
+    @abstractmethod
+    def edit_file(
+        self,
+        path: str,
+        old_string: str,
+        new_string: str,
+        *,
+        replace_all: bool = False,
+        allow_no_match: bool = False,
+        expected_replacements: Optional[int] = None,
+        encoding: str = "utf-8",
+    ) -> EditResult:
+        """Edit a file by replacing exact string matches.
+
+        Semantics:
+        - Relative paths are resolved against the sandbox's workspace root
+        - Matching is exact (byte-for-byte after encoding), not fuzzy
+        - If replace_all=False (default), exactly one match is required
+        - If replace_all=True, all matches are replaced
+        - expected_replacements asserts an exact match count; errors if different
+        - expected_replacements=0 asserts old_string is ABSENT: succeeds only if
+          there are 0 matches; errors if any matches exist
+        - To "remove if present, ignore if absent," use allow_no_match=True
+          (with expected_replacements=None)
+
+        Args:
+            path: File path (absolute or relative to workspace root).
+            old_string: Exact string to find and replace. Must not be empty.
+            new_string: Replacement string. May be empty to delete matches.
+            replace_all: If True, replace all occurrences. If False, require exactly one match.
+            allow_no_match: If True, return success (no-op) when old_string is not found.
+                Use for idempotent edits like "remove if present." Typically combined
+                with replace_all=True for cleanup. Default: False.
+            expected_replacements: Optional guard - assert exact match count.
+                Use expected_replacements=0 to assert old_string is absent.
+            encoding: Encoding for reading and writing the file (default: utf-8).
+
+        Returns:
+            EditResult with path, replacements_made, bytes_before, and bytes_after.
+
+        Raises:
+            ValueError: If old_string is empty, old_string == new_string,
+                allow_no_match is combined with expected_replacements, or match
+                count doesn't satisfy constraints (not exactly 1 when
+                replace_all=False, or doesn't match expected_replacements).
+            FileNotFoundError: If file doesn't exist.
+            IsADirectoryError: If path points to a directory.
+            RuntimeError: If sandbox is not alive.
         """
         pass
 

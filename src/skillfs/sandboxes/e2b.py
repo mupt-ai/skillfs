@@ -17,6 +17,8 @@ from skillfs.sandboxes.base import (
     SandboxCommandError,
     ExecutionResult,
     GrepMatch,
+    WriteResult,
+    EditResult,
 )
 
 # Load environment variables for E2B API key
@@ -669,6 +671,241 @@ class E2BSandbox(SandboxConnection):
             matches = matches[:max_results]
 
         return matches
+
+    def write_file(
+        self,
+        path: str,
+        content: str | bytes,
+        *,
+        create_dirs: bool = True,
+        overwrite: bool = True,
+        encoding: str = "utf-8",
+    ) -> WriteResult:
+        """Write content to a file in the E2B sandbox filesystem.
+
+        Uses E2B's native files.write() for bit-perfect fidelity.
+
+        Args:
+            path: File path (absolute or relative to workspace root).
+            content: Content to write (str or bytes).
+            create_dirs: Create parent directories if they don't exist (default: True).
+            overwrite: Allow overwriting existing files (default: True).
+            encoding: Encoding to use when content is str (default: utf-8).
+
+        Returns:
+            WriteResult with path, bytes_written, and created flag.
+
+        Raises:
+            ValueError: If path is empty.
+            FileNotFoundError: If create_dirs=False and parent directory doesn't exist.
+            FileExistsError: If overwrite=False and file already exists.
+            IsADirectoryError: If path points to an existing directory.
+            UnicodeEncodeError: If content is str and cannot be encoded with the specified encoding.
+            RuntimeError: If sandbox is not alive or directory creation fails.
+        """
+        if not self.is_alive or not self._sandbox:
+            raise RuntimeError("Sandbox is not active.")
+
+        if not path:
+            raise ValueError("path must be non-empty")
+
+        abs_path = self._resolve_path(path)
+
+        # Check if path is an existing directory
+        is_dir = self.run_command(f"test -d {shlex.quote(abs_path)}").exit_code == 0
+        if is_dir:
+            raise IsADirectoryError(f"Path is a directory: {abs_path}")
+
+        # Check if file exists (for created flag and overwrite check)
+        file_exists = self.run_command(f"test -f {shlex.quote(abs_path)}").exit_code == 0
+
+        # Reject special file types (device files, sockets, named pipes, etc.)
+        path_exists = self.run_command(f"test -e {shlex.quote(abs_path)}").exit_code == 0
+        if path_exists and not file_exists and not is_dir:
+            raise OSError(f"Path exists but is not a regular file or directory: {abs_path}")
+
+        if file_exists and not overwrite:
+            raise FileExistsError(f"File already exists: {abs_path}")
+
+        # Handle parent directory creation
+        # Note: E2B's files.write() auto-creates directories, so we must enforce
+        # create_dirs=False by checking parent exists BEFORE calling write
+        parent_dir = posixpath.dirname(abs_path)
+        if parent_dir and parent_dir != "/":
+            parent_exists = self.run_command(f"test -d {shlex.quote(parent_dir)}").exit_code == 0
+            if not parent_exists:
+                if not create_dirs:
+                    raise FileNotFoundError(f"Parent directory not found: {parent_dir}")
+                # create_dirs=True: explicitly create (though E2B would do it anyway)
+                result = self.run_command(f"mkdir -p {shlex.quote(parent_dir)}")
+                if result.exit_code != 0:
+                    raise RuntimeError(
+                        f"Failed to create parent directory {parent_dir}: {result.error}"
+                    )
+
+        # Encode content if it's a string
+        if isinstance(content, str):
+            content_bytes = content.encode(encoding)
+        else:
+            content_bytes = content
+
+        self._sandbox.files.write(abs_path, content_bytes)
+
+        return WriteResult(
+            path=abs_path,
+            bytes_written=len(content_bytes),
+            created=not file_exists,
+        )
+
+    def edit_file(
+        self,
+        path: str,
+        old_string: str,
+        new_string: str,
+        *,
+        replace_all: bool = False,
+        allow_no_match: bool = False,
+        expected_replacements: Optional[int] = None,
+        encoding: str = "utf-8",
+    ) -> EditResult:
+        """Edit a file by replacing exact string matches.
+
+        Reads the file, performs exact string replacement, and writes back
+        using E2B's native files.write() for bit-perfect fidelity.
+
+        Semantics:
+        - expected_replacements asserts an exact match count; errors if different
+        - expected_replacements=0 asserts old_string is ABSENT: succeeds only if
+          there are 0 matches; errors if any matches exist
+        - To "remove if present, ignore if absent," use allow_no_match=True
+          (with expected_replacements=None)
+
+        Args:
+            path: File path (absolute or relative to workspace root).
+            old_string: Exact string to find and replace. Must not be empty.
+            new_string: Replacement string. May be empty to delete matches.
+            replace_all: If True, replace all occurrences. If False, require exactly one match.
+            allow_no_match: If True, return success (no-op) when old_string is not found.
+                Use for idempotent edits like "remove if present." Typically combined
+                with replace_all=True for cleanup. Default: False.
+            expected_replacements: Optional guard - assert exact match count.
+                Use expected_replacements=0 to assert old_string is absent.
+            encoding: Encoding for reading and writing the file (default: utf-8).
+
+        Returns:
+            EditResult with path, replacements_made, bytes_before, and bytes_after.
+
+        Raises:
+            ValueError: If path is empty, old_string is empty, old_string == new_string,
+                allow_no_match is combined with expected_replacements, or match count
+                doesn't satisfy constraints.
+            FileNotFoundError: If file doesn't exist.
+            IsADirectoryError: If path points to a directory.
+            UnicodeDecodeError: If file cannot be decoded with the specified encoding.
+            UnicodeEncodeError: If new content cannot be encoded with the specified encoding.
+            RuntimeError: If sandbox is not alive.
+        """
+        if not self.is_alive or not self._sandbox:
+            raise RuntimeError("Sandbox is not active.")
+
+        # Validate inputs
+        if not path:
+            raise ValueError("path must be non-empty")
+
+        if not old_string:
+            raise ValueError("old_string must not be empty")
+
+        if old_string == new_string:
+            raise ValueError("old_string and new_string must be different")
+
+        if allow_no_match and expected_replacements is not None:
+            raise ValueError(
+                "allow_no_match cannot be used with expected_replacements; "
+                "set expected_replacements=None or drop allow_no_match"
+            )
+
+        if expected_replacements is not None and expected_replacements < 0:
+            raise ValueError(
+                f"expected_replacements must be >= 0, got: {expected_replacements}"
+            )
+
+        abs_path = self._resolve_path(path)
+
+        # Check if path is a directory
+        is_dir = self.run_command(f"test -d {shlex.quote(abs_path)}").exit_code == 0
+        if is_dir:
+            raise IsADirectoryError(f"Path is a directory: {abs_path}")
+
+        # Check if file exists
+        file_exists = self.run_command(f"test -f {shlex.quote(abs_path)}").exit_code == 0
+        if not file_exists:
+            raise FileNotFoundError(f"File not found: {abs_path}")
+
+        # Read current content
+        try:
+            raw_bytes = bytes(self._sandbox.files.read(abs_path, format="bytes"))
+            content = raw_bytes.decode(encoding)
+        except UnicodeDecodeError:
+            raise  # Let caller handle decode errors
+        except Exception as e:
+            error_str = str(e).lower()
+            if "not found" in error_str or "no such file" in error_str:
+                raise FileNotFoundError(f"File not found: {abs_path}")
+            raise
+
+        # Use original byte length (not re-encoded) for accurate file size
+        bytes_before = len(raw_bytes)
+
+        # Count occurrences
+        count = content.count(old_string)
+
+        # Validate count against constraints
+        if count == 0:
+            # No-op success cases:
+            # - expected_replacements=0: "assert absent" passed
+            # - allow_no_match=True: idempotent edit, nothing to remove
+            if expected_replacements == 0 or allow_no_match:
+                return EditResult(
+                    path=abs_path,
+                    replacements_made=0,
+                    bytes_before=bytes_before,
+                    bytes_after=bytes_before,
+                )
+            raise ValueError(
+                "old_string not found in file (set allow_no_match=True to treat as no-op)"
+            )
+
+        if not replace_all and count > 1:
+            raise ValueError(
+                f"old_string found {count} times (expected exactly 1 match, "
+                f"use replace_all=True to replace all)"
+            )
+
+        if expected_replacements is not None and count != expected_replacements:
+            raise ValueError(
+                f"Expected {expected_replacements} replacements but found {count} matches"
+            )
+
+        # Perform replacement
+        if replace_all:
+            new_content = content.replace(old_string, new_string)
+            replacements_made = count
+        else:
+            # Replace exactly one occurrence (first one)
+            # Note: count is guaranteed to be 1 here (0 and >1 cases rejected above)
+            new_content = content.replace(old_string, new_string, 1)
+            replacements_made = 1
+
+        # Write back using E2B's native API
+        new_content_bytes = new_content.encode(encoding)
+        self._sandbox.files.write(abs_path, new_content_bytes)
+
+        return EditResult(
+            path=abs_path,
+            replacements_made=replacements_made,
+            bytes_before=bytes_before,
+            bytes_after=len(new_content_bytes),
+        )
 
     def close(self) -> None:
         """Terminate and cleanup the E2B sandbox instance."""
