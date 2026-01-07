@@ -23,6 +23,7 @@ logging.basicConfig(
 from skillfs.agents import Agent
 from skillfs.sandboxes import E2BSandbox, SandboxConfig
 from skillfs.skills import SkillCatalog
+from skillfs.runners.tools import create_load_skill_tool
 # import asyncio
 # sandbox = E2BSandbox.create(config=SandboxConfig(timeout=3000))
 # store = GCSBundleStore(bucket="dari_dev_test_bucket", prefix="agents/")
@@ -90,21 +91,21 @@ async def main():
                 ]
             }
         },
-        generate_mcp_tools=True,
-        skills={
-            "github": [
-                "https://github.com/agentskills/agentskills",
-                {
-                    "url": "https://github.com/anthropics/claude-cookbooks",
-                    "path": "skills/custom_skills/creating-financial-models"
-                },
-                {
-                    "url": "https://github.com/anthropics/claude-cookbooks",
-                    "ref": "pedram/fix-notebook-standards",
-                    "path": "skills/custom_skills/applying-brand-guidelines"
-                }
-            ]
-        },
+        # generate_mcp_tools=True,
+        # skills={
+        #     "github": [
+        #         "https://github.com/agentskills/agentskills",
+        #         {
+        #             "url": "https://github.com/anthropics/claude-cookbooks",
+        #             "path": "skills/custom_skills/creating-financial-models"
+        #         },
+        #         {
+        #             "url": "https://github.com/anthropics/claude-cookbooks",
+        #             "ref": "pedram/fix-notebook-standards",
+        #             "path": "skills/custom_skills/applying-brand-guidelines"
+        #         }
+        #     ]
+        # },
         load_skills=True,
     )
     await agent.load()
@@ -142,6 +143,9 @@ async def main():
 
     print("=== End Skill Catalog Test ===\n")
 
+    # Create load_skill tool with dynamic schema (includes discovered skills in description)
+    load_skill_schema, load_skill_handler = create_load_skill_tool(catalog)
+
     # Define the tool schema for Claude
     tools = [
         {
@@ -162,6 +166,141 @@ async def main():
                 "required": ["command"],
             },
         },
+        {
+            "name": "read_file",
+            "description": "Read file contents as text. Returns the file content as a string.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path to the file in the sandbox",
+                    },
+                    "max_bytes": {
+                        "type": "integer",
+                        "description": "Maximum bytes to read (optional, for large files)",
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+        {
+            "name": "glob",
+            "description": """Find files matching a glob pattern. Patterns are matched relative to root; use **/ for recursive matches.
+Examples: "*.py" matches top-level .py files; "**/*.py" matches recursively.
+Skips hidden files/directories by default (use dot=true to include).""",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Glob pattern (e.g., '*.py', '**/*.md', 'src/**/*.py')",
+                    },
+                    "root": {
+                        "type": "string",
+                        "description": "Base directory to search from (default: repo root)",
+                    },
+                    "dot": {
+                        "type": "boolean",
+                        "description": "Include dotfiles/directories (default: false)",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum results to return",
+                    },
+                },
+                "required": ["pattern"],
+            },
+        },
+        {
+            "name": "grep",
+            "description": """Search file contents for a pattern. Returns matches with file path, line number, column, and matching text.
+Uses regex by default; set regex=false for literal string matching.
+Use include to filter files (e.g., "**/*.py" for Python files only).""",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Search pattern (regex by default, or literal if regex=false)",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "File or directory to search in (default: repo root)",
+                    },
+                    "include": {
+                        "type": "string",
+                        "description": "Glob pattern to filter files (e.g., '**/*.py')",
+                    },
+                    "ignore_case": {
+                        "type": "boolean",
+                        "description": "Case-insensitive search (default: false)",
+                    },
+                    "regex": {
+                        "type": "boolean",
+                        "description": "Treat pattern as regex (default: true)",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum matches to return",
+                    },
+                },
+                "required": ["pattern"],
+            },
+        },
+        {
+            "name": "write_file",
+            "description": """Write content to a file. Creates the file if it doesn't exist, or overwrites if it does.
+Parent directories are created automatically. Use this for creating new files or completely replacing file contents.""",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path to the file to write",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Content to write to the file",
+                    },
+                    "overwrite": {
+                        "type": "boolean",
+                        "description": "Allow overwriting existing files (default: true)",
+                    },
+                },
+                "required": ["path", "content"],
+            },
+        },
+        {
+            "name": "edit_file",
+            "description": """Edit a file by replacing exact string matches. Use this for surgical edits to existing files.
+By default, requires exactly one match of old_string in the file. Set replace_all=true to replace all occurrences.
+The old_string must match exactly (including whitespace and indentation).""",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path to the file to edit",
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": "Exact string to find and replace (must exist in file)",
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": "Replacement string (can be empty to delete)",
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "Replace all occurrences instead of requiring exactly one (default: false)",
+                    },
+                },
+                "required": ["path", "old_string", "new_string"],
+            },
+        },
+        # Dynamic load_skill tool (schema includes discovered skills)
+        load_skill_schema,
     ]
 
     # System prompt that explains the agent's capabilities and context
@@ -183,7 +322,13 @@ CRITICAL: ALWAYS USE UV TO RUN PYTHON
 - The virtual environment is managed by uv, so all commands must go through it
 
 CAPABILITIES:
-- You can execute ANY shell command via the run_command tool
+- run_command: Execute any shell command in the sandbox
+- read_file: Read file contents directly (faster than cat)
+- write_file: Create new files or overwrite existing ones
+- edit_file: Make surgical edits to existing files (find and replace)
+- glob: Find files by pattern (e.g., "**/*.py" for all Python files)
+- grep: Search file contents with regex or literal patterns
+- load_skill: Load detailed instructions for a specific skill (see available skills in tool description)
 - You have full read/write access to the filesystem
 - You can install packages with: uv add <package>
 - Python, Node.js, and common dev tools are pre-installed
@@ -209,11 +354,14 @@ Note: Each server has its own connect/disconnect functions (e.g., connect_playwr
 so you can use multiple MCP servers in the same script without naming conflicts.
 
 EXAMPLES:
-- List files: run_command("ls -la {repo_root}/src/servers")
+- Find all Python files: glob(pattern="**/*.py")
+- Search for imports: grep(pattern="import asyncio", include="**/*.py")
+- Read a file: read_file(path="{repo_root}/pyproject.toml")
+- Write a new file: write_file(path="{repo_root}/src/skills/my_skill.py", content="...")
+- Edit an existing file: edit_file(path="{repo_root}/src/skills/my_skill.py", old_string="old code", new_string="new code")
 - Run a Python script: run_command("cd {repo_root} && uv run python my_script.py")
 - Run a module: run_command("cd {repo_root} && uv run python -m src.skills.my_skill")
 - Add a package: run_command("cd {repo_root} && uv add requests")
-- Test MCP server: run_command("cd {repo_root} && uv run python -c 'from src.servers.playwright import connect_playwright; print(connect_playwright)'")
 
 REQUIREMENTS:
 - When you are writing new scripts, write them in skills/ and import server stuff as from src.servers.xxx import ...
@@ -235,7 +383,7 @@ When the session ends, all your work will be committed to the Git repo and saved
     print("Claude has access to the sandbox environment.")
     print("Type your requests (or 'quit' to exit)\n")
     print(f"System context: Persistent E2B sandbox with Git repo at {repo_root}")
-    print("Available: Python, Node.js, MCP servers (Playwright), run_command tool\n")
+    print(f"Tools: run_command, read_file, write_file, edit_file, glob, grep, load_skill ({num_skills} skills) | MCP: Playwright, browser-use\n")
 
     while True:
         # Get user input
@@ -276,17 +424,17 @@ When the session ends, all your work will be committed to the Git repo and saved
                 elif block.type == "tool_use":
                     tool_name = block.name
                     tool_input = block.input
+                    tool_result = None
 
                     if tool_name == "run_command":
                         command = tool_input.get("command")
                         cwd = tool_input.get("cwd")
 
-                        print(f"\n[Executing: {command}]", flush=True)
+                        print(f"\n[TOOL USED: Executing: {command}]", flush=True)
 
                         # Run the command in the agent's sandbox
                         result = agent.run_command(command, cwd=cwd)
 
-                        # Prepare tool result
                         tool_result = {
                             "stdout": result.logs,
                             "stderr": result.error or "",
@@ -297,12 +445,167 @@ When the session ends, all your work will be committed to the Git repo and saved
                         if result.logs:
                             print(f"[Output preview: {result.logs[:200]}...]", flush=True)
 
-                        # Collect tool result
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": str(tool_result),
-                        })
+                    elif tool_name == "read_file":
+                        path = tool_input.get("path")
+                        max_bytes = tool_input.get("max_bytes")
+
+                        print(f"\n[TOOL USED: Reading file: {path}]", flush=True)
+
+                        try:
+                            content = sandbox.read_file_text(path, max_bytes=max_bytes)
+                            tool_result = {"content": content}
+                            print(f"[Read {len(content)} chars]", flush=True)
+                        except FileNotFoundError:
+                            tool_result = {"error": f"File not found: {path}"}
+                            print(f"[Error: File not found]", flush=True)
+                        except Exception as e:
+                            tool_result = {"error": str(e)}
+                            print(f"[Error: {e}]", flush=True)
+
+                    elif tool_name == "glob":
+                        pattern = tool_input.get("pattern")
+                        root = tool_input.get("root", ".")
+                        dot = tool_input.get("dot", False)
+                        max_results = tool_input.get("max_results")
+
+                        print(f"\n[TOOL USED: Glob: {pattern} in {root}]", flush=True)
+
+                        try:
+                            paths = sandbox.glob(
+                                pattern,
+                                root=root,
+                                dot=dot,
+                                max_results=max_results,
+                            )
+                            tool_result = {"paths": paths, "count": len(paths)}
+                            print(f"[Found {len(paths)} files]", flush=True)
+                        except FileNotFoundError as e:
+                            tool_result = {"error": str(e), "paths": []}
+                            print(f"[Error: {e}]", flush=True)
+                        except ValueError as e:
+                            tool_result = {"error": str(e), "paths": []}
+                            print(f"[Error: {e}]", flush=True)
+
+                    elif tool_name == "grep":
+                        pattern = tool_input.get("pattern")
+                        path = tool_input.get("path", ".")
+                        include = tool_input.get("include")
+                        ignore_case = tool_input.get("ignore_case", False)
+                        regex = tool_input.get("regex", True)
+                        max_results = tool_input.get("max_results")
+
+                        print(f"\n[TOOL USED: Grep: '{pattern}' in {path}]", flush=True)
+
+                        try:
+                            matches = sandbox.grep(
+                                pattern,
+                                path=path,
+                                include=include,
+                                ignore_case=ignore_case,
+                                regex=regex,
+                                max_results=max_results,
+                            )
+                            # Convert GrepMatch objects to dicts
+                            tool_result = {
+                                "matches": [
+                                    {
+                                        "path": m.path,
+                                        "line": m.line,
+                                        "column": m.column,
+                                        "text": m.text,
+                                    }
+                                    for m in matches
+                                ],
+                                "count": len(matches),
+                            }
+                            print(f"[Found {len(matches)} matches]", flush=True)
+                        except FileNotFoundError as e:
+                            tool_result = {"error": str(e), "matches": []}
+                            print(f"[Error: {e}]", flush=True)
+                        except ValueError as e:
+                            tool_result = {"error": str(e), "matches": []}
+                            print(f"[Error: {e}]", flush=True)
+
+                    elif tool_name == "write_file":
+                        path = tool_input.get("path")
+                        content = tool_input.get("content")
+                        overwrite = tool_input.get("overwrite", True)
+
+                        print(f"\n[TOOL USED: Writing file: {path}]", flush=True)
+
+                        try:
+                            result = sandbox.write_file(
+                                path,
+                                content,
+                                overwrite=overwrite,
+                            )
+                            tool_result = {
+                                "path": result.path,
+                                "bytes_written": result.bytes_written,
+                                "created": result.created,
+                            }
+                            action = "Created" if result.created else "Overwrote"
+                            print(f"[{action} {result.bytes_written} bytes]", flush=True)
+                        except FileExistsError:
+                            tool_result = {"error": f"File already exists: {path} (set overwrite=true to replace)"}
+                            print(f"[Error: File exists]", flush=True)
+                        except Exception as e:
+                            tool_result = {"error": str(e)}
+                            print(f"[Error: {e}]", flush=True)
+
+                    elif tool_name == "edit_file":
+                        path = tool_input.get("path")
+                        old_string = tool_input.get("old_string")
+                        new_string = tool_input.get("new_string")
+                        replace_all = tool_input.get("replace_all", False)
+
+                        print(f"\n[TOOL USED: Editing file: {path}]", flush=True)
+
+                        try:
+                            result = sandbox.edit_file(
+                                path,
+                                old_string,
+                                new_string,
+                                replace_all=replace_all,
+                            )
+                            tool_result = {
+                                "path": result.path,
+                                "replacements_made": result.replacements_made,
+                                "bytes_before": result.bytes_before,
+                                "bytes_after": result.bytes_after,
+                            }
+                            print(f"[Made {result.replacements_made} replacement(s)]", flush=True)
+                        except FileNotFoundError:
+                            tool_result = {"error": f"File not found: {path}"}
+                            print(f"[Error: File not found]", flush=True)
+                        except ValueError as e:
+                            tool_result = {"error": str(e)}
+                            print(f"[Error: {e}]", flush=True)
+                        except Exception as e:
+                            tool_result = {"error": str(e)}
+                            print(f"[Error: {e}]", flush=True)
+
+                    elif tool_name == "load_skill":
+                        skill_name = tool_input.get("name")
+
+                        print(f"\n[TOOL USED: Loading skill: {skill_name}]", flush=True)
+
+                        tool_result = load_skill_handler(name=skill_name)
+                        if "error" in tool_result:
+                            print(f"[Error: {tool_result['error']}]", flush=True)
+                        else:
+                            print(f"[Loaded {tool_result['length']} chars]", flush=True)
+
+                    else:
+                        tool_result = {"error": f"Unknown tool: {tool_name}"}
+                        print(f"\n[Unknown tool: {tool_name}]", flush=True)
+
+                    # Collect tool result
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": str(tool_result),
+                    })
 
             # Add assistant message with all content (text + tool uses)
             messages.append({"role": "assistant", "content": assistant_content})
