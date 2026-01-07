@@ -224,6 +224,16 @@ class Agent:
                 self.runner.tools.append(self.load_skill_schema)
                 self.runner.handlers["load_skill"] = self.load_skill_handler
                 logger.info("Injected load_skill tool into runner")
+
+                # Also inject into subrunner_extra_tools so subrunners get skills too
+                if hasattr(self.runner, "subrunner_extra_tools") and hasattr(
+                    self.runner, "subrunner_extra_handlers"
+                ):
+                    self.runner.subrunner_extra_tools.append(self.load_skill_schema)
+                    self.runner.subrunner_extra_handlers["load_skill"] = (
+                        self.load_skill_handler
+                    )
+                    logger.info("Injected load_skill tool for subrunners")
             else:
                 logger.warning(
                     f"Runner {self.runner_class.__name__} does not expose "
