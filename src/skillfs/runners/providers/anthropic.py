@@ -226,31 +226,47 @@ class AnthropicAgentRunner(AgentRunner):
         TextBlock structure: {type: "text", text: str}
         ToolUseBlock structure: {type: "tool_use", id: str, name: str, input: dict}
 
+        Note: We explicitly extract only the expected fields because model_dump()
+        may include extra fields (like 'caller') that the API rejects.
+
         See: https://github.com/anthropics/anthropic-sdk-python
         """
+        # Get block type (works for both dict and object)
         if isinstance(block, dict):
-            # Already a dict
+            block_type = block.get("type", "unknown")
+        else:
+            block_type = getattr(block, "type", "unknown")
+
+        # Extract only the fields the API expects for each block type
+        if block_type == "text":
+            text = block.get("text", "") if isinstance(block, dict) else getattr(block, "text", "")
+            return {"type": "text", "text": text}
+
+        elif block_type == "tool_use":
+            if isinstance(block, dict):
+                return {
+                    "type": "tool_use",
+                    "id": block.get("id", ""),
+                    "name": block.get("name", ""),
+                    "input": block.get("input", {}),
+                }
+            else:
+                return {
+                    "type": "tool_use",
+                    "id": getattr(block, "id", ""),
+                    "name": getattr(block, "name", ""),
+                    "input": getattr(block, "input", {}),
+                }
+
+        # Fallback for unknown block types
+        if isinstance(block, dict):
             return block
-
-        # Anthropic SDK uses Pydantic models with model_dump()
-        if hasattr(block, "model_dump"):
+        elif hasattr(block, "model_dump"):
             return block.model_dump()
-
-        # Pydantic v1 fallback
-        if hasattr(block, "dict"):
+        elif hasattr(block, "dict"):
             return block.dict()
-
-        # Manual fallback for edge cases
-        result: Dict[str, Any] = {"type": getattr(block, "type", "unknown")}
-        if hasattr(block, "text"):
-            result["text"] = block.text
-        if hasattr(block, "id"):
-            result["id"] = block.id
-        if hasattr(block, "name"):
-            result["name"] = block.name
-        if hasattr(block, "input"):
-            result["input"] = block.input
-        return result
+        else:
+            return {"type": block_type}
 
     def _serialize_content(self, content: List[Any]) -> List[Dict[str, Any]]:
         """Convert a list of ContentBlocks to serializable dicts."""
