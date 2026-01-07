@@ -131,10 +131,42 @@ Built-in sandbox tools available to runners:
 - `write_file`: Create/overwrite files
 - `edit_file`: Make targeted string replacements
 - `run_command`: Execute shell commands
+- `git_commit`: Commit changes and save state to persistent storage
 
 Dynamic tools (auto-created when configured):
 - `call_subrunner` - Delegate to specialist agents
 - `load_skill` - Load skill instructions on-demand
+
+### Git Commit Tool
+
+The `git_commit` tool enables agents to checkpoint their work by committing changes to the Git repository and persisting state to the bundle store.
+
+Enable it when creating an Agent:
+
+```python
+agent = Agent(
+    agent_id="my-agent",
+    sandbox=sandbox,
+    store=store,
+    provider=provider,
+    runner=MainRunner,
+    runner_config={
+        "name": "assistant",
+        "description": "Assistant with git checkpointing",
+        "system_prompt": "You are a helpful assistant...",
+        "tools": ["glob", "read_file", "write_file"],
+    },
+    enable_git_commit=True,  # Injects git_commit tool into the runner
+)
+```
+
+When called, the tool:
+1. Shows current diff and status
+2. Stages all changes (`git add -A`)
+3. Creates a commit with an auto-generated message (or custom if provided)
+4. Creates a Git bundle and uploads it to storage
+
+Commit messages follow conventional commit format (`feat:`, `fix:`, `refactor:`, `docs:`, `chore:`).
 
 ## Agents & Persistence
 
