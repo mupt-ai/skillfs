@@ -41,9 +41,15 @@ class E2BSandbox(SandboxConnection):
         ...     result = sandbox.run_code("x = 2 + 2\\nprint(x)")
         ...     print(result.logs)
         4
+
+        To use a custom template:
+        >>> config = SandboxConfig(metadata={"template": "your-template-id"})
+        >>> sandbox = E2BSandbox.create(config=config)
     """
 
     DEFAULT_REPO_ROOT = E2B_DEFAULT_REPO_ROOT
+    DEFAULT_TEMPLATE = "f2p2ivjafffh63exstg0"
+    """Default E2B template with uv preinstalled."""
 
     def __init__(self, config: Optional[SandboxConfig] = None):
         """Initialize E2B sandbox configuration.
@@ -78,10 +84,13 @@ class E2BSandbox(SandboxConnection):
                 "or provide in SandboxConfig."
             )
 
+        # Get template from config metadata or use default
+        template = instance.config.metadata.get("template", cls.DEFAULT_TEMPLATE)
+
         # Create E2B sandbox (timeout is applied per run_code call)
         instance._sandbox = Sandbox.create(
             api_key=api_key,
-            template="uv-downloaded",
+            template=template,
             envs=instance.config.envs or {}
         )
 
