@@ -10,6 +10,7 @@ from skillfs.agents.persistence import load_agent_state, save_agent_state
 from skillfs.repositories.git_repo import GitRepo
 from skillfs.runners.base import AgentResult, RunnerProvider, RunnerType
 from skillfs.runners.tools.load_skill import create_load_skill_tool
+from skillfs.runners.tools.git_commit import create_git_commit_tool
 from skillfs.sandboxes.base import SandboxConnection
 from skillfs.skills.catalog import SkillCatalog
 from skillfs.storage.base import BundleStore
@@ -75,6 +76,7 @@ class Agent:
         generate_mcp_tools: bool = False,
         skills: Optional[Dict[str, Any]] = None,
         load_skills: bool = False,
+        enable_git_commit: bool = False,
     ):
         """Initialize agent instance.
 
@@ -101,12 +103,16 @@ class Agent:
                    Format: {"local": "/path/to/skills" or ["/path1", "/path2"]}
             load_skills: If True, load skills from configured sources during load.
                         If False, skills config is ignored.
+            enable_git_commit: If True, inject git_commit tool into runner.
+                              This allows the agent to checkpoint its work.
 
         After load(), the following attributes are available:
             git_repo: GitRepo instance for the agent's repository.
             skill_catalog: SkillCatalog with discovered SKILL.md files.
             load_skill_schema: Tool schema for load_skill (None if no skills found).
             load_skill_handler: Handler function for load_skill (None if no skills found).
+            git_commit_schema: Tool schema for git_commit (None if not enabled).
+            git_commit_handler: Handler function for git_commit (None if not enabled).
             runner: Instantiated runner (None if no runner class was provided).
         """
         self.agent_id = agent_id
@@ -120,10 +126,13 @@ class Agent:
         self.generate_mcp_tools = generate_mcp_tools
         self.skills = skills or {}
         self.load_skills = load_skills
+        self.enable_git_commit = enable_git_commit
         self.git_repo: Optional[GitRepo] = None
         self.skill_catalog: Optional[SkillCatalog] = None
         self.load_skill_schema: Optional[Dict[str, Any]] = None
         self.load_skill_handler: Optional[Any] = None
+        self.git_commit_schema: Optional[Dict[str, Any]] = None
+        self.git_commit_handler: Optional[Any] = None
         self.runner: Optional[RunnerType] = None
         self._is_loaded = False
 
@@ -164,6 +173,16 @@ class Agent:
         # Setup skills if flag is enabled
         if self.load_skills and self.skills:
             await self.setup_skills(self.skills)
+
+        # Create git_commit tool if enabled
+        if self.enable_git_commit and self.git_repo is not None:
+            self.git_commit_schema, self.git_commit_handler = create_git_commit_tool(
+                sandbox=self.sandbox,
+                git_repo=self.git_repo,
+                bundle_store=self.store,
+                agent_id=self.agent_id,
+            )
+            logger.info("Created git_commit tool for agent")
 
         # Create and scan skill catalog to discover SKILL.md files
         # This indexes skills that were uploaded or already exist in the sandbox
@@ -238,6 +257,28 @@ class Agent:
                 logger.warning(
                     f"Runner {self.runner_class.__name__} does not expose "
                     "tools/handlers for skill injection"
+                )
+
+        # Inject git_commit tool if enabled
+        if self.git_commit_schema is not None and self.git_commit_handler is not None:
+            if hasattr(self.runner, "tools") and hasattr(self.runner, "handlers"):
+                self.runner.tools.append(self.git_commit_schema)
+                self.runner.handlers["git_commit"] = self.git_commit_handler
+                logger.info("Injected git_commit tool into runner")
+
+                # Also inject into subrunner_extra_tools so subrunners can checkpoint too
+                if hasattr(self.runner, "subrunner_extra_tools") and hasattr(
+                    self.runner, "subrunner_extra_handlers"
+                ):
+                    self.runner.subrunner_extra_tools.append(self.git_commit_schema)
+                    self.runner.subrunner_extra_handlers["git_commit"] = (
+                        self.git_commit_handler
+                    )
+                    logger.info("Injected git_commit tool for subrunners")
+            else:
+                logger.warning(
+                    f"Runner {self.runner_class.__name__} does not expose "
+                    "tools/handlers for git_commit injection"
                 )
 
     async def run(self, task: str) -> AgentResult:

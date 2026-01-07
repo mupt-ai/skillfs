@@ -19,7 +19,7 @@ pip install skillfs
 ```
 
 You'll also need:
-- An [E2B](https://e2b.dev) API key for sandbox execution
+- An [E2B](https://e2b.dev) API key for sandbox execution (the default template has `uv` preinstalled)
 - An LLM API key (e.g., Anthropic) for agent reasoning
 
 ## Quick Start

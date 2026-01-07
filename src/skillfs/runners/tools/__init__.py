@@ -32,6 +32,7 @@ from skillfs.runners.tools import (
     run_command,
     subrunner,
     load_skill,
+    git_commit,
 )
 
 from skillfs.sandboxes.base import SandboxConnection
@@ -51,6 +52,9 @@ create_subrunner_tool = subrunner.create_subrunner_tool
 
 # Re-export load_skill helpers
 create_load_skill_tool = load_skill.create_load_skill_tool
+
+# Re-export git_commit helpers
+create_git_commit_tool = git_commit.create_git_commit_tool
 
 
 def _validate_tool_names(tool_names: List[str]) -> None:
@@ -113,6 +117,7 @@ __all__ = [
     "build_handlers",
     "create_subrunner_tool",
     "create_load_skill_tool",
+    "create_git_commit_tool",
     # Built-in tool modules
     "glob",
     "grep",
@@ -122,4 +127,5 @@ __all__ = [
     "run_command",
     "subrunner",
     "load_skill",
+    "git_commit",
 ]
