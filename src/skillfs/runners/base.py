@@ -174,7 +174,7 @@ class RunnerProvider(ABC):
 
     Example:
         >>> # Create a provider with Anthropic config
-        >>> provider = AnthropicProvider(client=client, model="claude-sonnet-4-5-20250929")
+        >>> provider = AnthropicProvider(api_key="sk-ant-...", model="claude-sonnet-4-5-20250929")
         >>>
         >>> # Use it to create runners (provider-agnostic)
         >>> search = SearchRunner(sandbox=sandbox, provider=provider)

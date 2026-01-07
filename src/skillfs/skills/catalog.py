@@ -160,6 +160,17 @@ class SkillCatalog:
         """
         return list(self._skills.values())
 
+    def get_metadata(self, name: str) -> Optional[SkillMetadata]:
+        """Get skill metadata by name.
+
+        Args:
+            name: Skill name
+
+        Returns:
+            SkillMetadata if found, None otherwise
+        """
+        return self._skills.get(name)
+
     def get_skill(self, name: str) -> Optional[str]:
         """Get full skill content by name.
 

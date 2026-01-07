@@ -4,11 +4,14 @@ import logging
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Type
 
 from skillfs.agents.persistence import load_agent_state, save_agent_state
 from skillfs.repositories.git_repo import GitRepo
-from skillfs.sandboxes.base import ExecutionResult, SandboxConnection
+from skillfs.runners.base import AgentResult, RunnerProvider, RunnerType
+from skillfs.runners.tools.load_skill import create_load_skill_tool
+from skillfs.sandboxes.base import SandboxConnection
+from skillfs.skills.catalog import SkillCatalog
 from skillfs.storage.base import BundleStore
 
 logger = logging.getLogger(__name__)
@@ -17,29 +20,40 @@ class Agent:
     """High-level interface for managing a persistent agent.
 
     Encapsulates agent identity, sandbox connection, storage backend, and
-    provides convenient methods for loading and saving agent state.
+    provides convenient methods for loading, saving, and running agent tasks.
 
     Example:
         >>> from skillfs.sandboxes import E2BSandbox
         >>> from skillfs.storage import GCSBundleStore
         >>> from skillfs.agents import Agent
+        >>> from skillfs.runners.providers.anthropic import AnthropicProvider
+        >>> from skillfs.runners.types import MainRunner
         >>>
         >>> # Setup
         >>> sandbox = E2BSandbox.create()
         >>> store = GCSBundleStore(bucket="my-agents", prefix="prod/")
+        >>> provider = AnthropicProvider(api_key="...", model="claude-sonnet-4-20250514")
         >>>
-        >>> # Create agent
+        >>> # Create agent with runner
         >>> agent = Agent(
         >>>     agent_id="alice-123",
         >>>     sandbox=sandbox,
-        >>>     store=store
+        >>>     store=store,
+        >>>     provider=provider,
+        >>>     runner=MainRunner,
+        >>>     runner_config={
+        >>>         "name": "main",
+        >>>         "description": "Main agent",
+        >>>         "system_prompt": "You are a helpful assistant...",
+        >>>         "tools": ["glob", "grep", "read_file"],
+        >>>     },
         >>> )
         >>>
         >>> # Load state (from bundle if exists, or fresh init)
-        >>> agent.load()
+        >>> await agent.load()
         >>>
-        >>> # Agent does work...
-        >>> # ... writes skills, modifies files in agent.git_repo ...
+        >>> # Run a task
+        >>> result = await agent.run("Find all Python files")
         >>>
         >>> # Save state back to storage
         >>> agent.save()
@@ -53,6 +67,9 @@ class Agent:
         agent_id: str,
         sandbox: SandboxConnection,
         store: BundleStore,
+        provider: Optional[RunnerProvider] = None,
+        runner: Optional[Type[RunnerType]] = None,
+        runner_config: Optional[Dict[str, Any]] = None,
         repo_root: Optional[str] = None,
         mcp_servers: Optional[Dict[str, Dict[str, Any]]] = None,
         generate_mcp_tools: bool = False,
@@ -65,6 +82,15 @@ class Agent:
             agent_id: Unique identifier for this agent.
             sandbox: Active sandbox connection where agent operates.
             store: Storage backend for persisting agent state.
+            provider: Default RunnerProvider for creating runners. Can be overridden
+                     in runner_config. Required if runner is specified without
+                     a provider in runner_config.
+            runner: Runner class to instantiate (e.g., MainRunner). If None,
+                   agent.run() will raise an error.
+            runner_config: Configuration dict passed to runner constructor.
+                          Can include 'provider' to override agent's default provider.
+                          Other keys depend on the runner class (e.g., name, description,
+                          system_prompt, tools, subrunners, max_turns for MainRunner).
             repo_root: Path inside sandbox for the Git repository.
                 If None, uses sandbox.default_repo_root.
             mcp_servers: Optional MCP server configurations.
@@ -75,16 +101,30 @@ class Agent:
                    Format: {"local": "/path/to/skills" or ["/path1", "/path2"]}
             load_skills: If True, load skills from configured sources during load.
                         If False, skills config is ignored.
+
+        After load(), the following attributes are available:
+            git_repo: GitRepo instance for the agent's repository.
+            skill_catalog: SkillCatalog with discovered SKILL.md files.
+            load_skill_schema: Tool schema for load_skill (None if no skills found).
+            load_skill_handler: Handler function for load_skill (None if no skills found).
+            runner: Instantiated runner (None if no runner class was provided).
         """
         self.agent_id = agent_id
         self.sandbox = sandbox
         self.store = store
+        self.provider = provider
+        self.runner_class = runner
+        self.runner_config = runner_config or {}
         self.repo_root = repo_root if repo_root is not None else sandbox.default_repo_root
         self.mcp_servers = mcp_servers or {}
         self.generate_mcp_tools = generate_mcp_tools
         self.skills = skills or {}
         self.load_skills = load_skills
         self.git_repo: Optional[GitRepo] = None
+        self.skill_catalog: Optional[SkillCatalog] = None
+        self.load_skill_schema: Optional[Dict[str, Any]] = None
+        self.load_skill_handler: Optional[Any] = None
+        self.runner: Optional[RunnerType] = None
         self._is_loaded = False
 
         logger.info(f"Created agent instance: {agent_id}")
@@ -125,8 +165,108 @@ class Agent:
         if self.load_skills and self.skills:
             await self.setup_skills(self.skills)
 
+        # Create and scan skill catalog to discover SKILL.md files
+        # This indexes skills that were uploaded or already exist in the sandbox
+        self.skill_catalog = SkillCatalog(
+            sandbox=self.sandbox,
+            repo_root=self.repo_root,
+        )
+        num_skills = await self.skill_catalog.scan()
+        if num_skills > 0:
+            logger.info(f"Discovered {num_skills} skill(s) in sandbox")
+            # Create load_skill tool for use with runners
+            self.load_skill_schema, self.load_skill_handler = create_load_skill_tool(
+                self.skill_catalog
+            )
+
+        # Instantiate runner if configured
+        if self.runner_class is not None:
+            self._setup_runner()
+
         self._is_loaded = True
         logger.info(f"Agent {self.agent_id} loaded successfully")
+
+    def _setup_runner(self) -> None:
+        """Instantiate the runner with skill tool injection.
+
+        Called during load() after skill catalog is set up.
+        Resolves provider from runner_config or falls back to agent's provider.
+        Automatically injects load_skill tool if skills were discovered.
+
+        Raises:
+            RuntimeError: If no provider is available.
+        """
+        if self.runner_class is None:
+            return
+
+        # Make a copy of runner_config to avoid mutating the original
+        config = dict(self.runner_config)
+
+        # Resolve provider: runner_config overrides agent default
+        runner_provider = config.pop("provider", None) or self.provider
+        if runner_provider is None:
+            raise RuntimeError(
+                f"Agent {self.agent_id}: No provider configured. "
+                "Set provider on Agent or in runner_config."
+            )
+
+        # Instantiate the runner
+        self.runner = self.runner_class(
+            sandbox=self.sandbox,
+            provider=runner_provider,
+            **config,
+        )
+
+        # Inject load_skill tool if skills were discovered
+        if self.load_skill_schema is not None and self.load_skill_handler is not None:
+            # MainRunner (and compatible runners) expose tools/handlers lists
+            if hasattr(self.runner, "tools") and hasattr(self.runner, "handlers"):
+                self.runner.tools.append(self.load_skill_schema)
+                self.runner.handlers["load_skill"] = self.load_skill_handler
+                logger.info("Injected load_skill tool into runner")
+            else:
+                logger.warning(
+                    f"Runner {self.runner_class.__name__} does not expose "
+                    "tools/handlers for skill injection"
+                )
+
+    async def run(self, task: str) -> AgentResult:
+        """Run a task using the agent's configured runner.
+
+        Delegates to the runner that was instantiated during load().
+        The runner has access to all configured tools plus the load_skill
+        tool if skills were discovered.
+
+        Args:
+            task: The task or prompt for the agent to process.
+
+        Returns:
+            AgentResult with the response and conversation history.
+
+        Raises:
+            RuntimeError: If agent is not loaded or no runner is configured.
+
+        Example:
+            >>> await agent.load()
+            >>> result = await agent.run("Find all Python files and summarize them")
+            >>> print(result.message)
+        """
+        if not self._is_loaded:
+            raise RuntimeError(
+                f"Agent {self.agent_id} is not loaded. Call load() first."
+            )
+
+        if self.runner is None:
+            raise RuntimeError(
+                f"Agent {self.agent_id} has no runner configured. "
+                "Pass runner and runner_config to Agent() to enable run()."
+            )
+
+        logger.info(f"Agent {self.agent_id} running task: {task[:50]}...")
+        result = await self.runner.run(task)
+        logger.info(f"Agent {self.agent_id} completed task (success={result.success})")
+
+        return result
 
     def save(self, commit_message: Optional[str] = None) -> None:
         """Save agent state from sandbox to storage.
@@ -528,29 +668,6 @@ class Agent:
         num_files = len([k for k in uploaded_items if k in file_sources])
         logger.info(f"Successfully setup {num_folders} skill(s) and {num_files} file(s) in sandbox")
         return uploaded_items
-
-    def run_command(
-        self, command: str, cwd: Optional[str] = None
-    ) -> ExecutionResult:
-        """Run a shell command in the sandbox.
-
-        Args:
-            command: Shell command to execute.
-            cwd: Optional working directory for the command.
-
-        Returns:
-            ExecutionResult with stdout, stderr, and exit code.
-
-        Raises:
-            RuntimeError: If agent is not loaded.
-        """
-        if not self._is_loaded:
-            raise RuntimeError(
-                f"Agent {self.agent_id} is not loaded. Call load() first."
-            )
-        result = self.sandbox.run_command(command, cwd=cwd)
-        logger.info(f"Executed command: {command} (exit code: {result.exit_code})")
-        return result
 
     @property
     def is_loaded(self) -> bool:
