@@ -1,14 +1,14 @@
-"""Agent management for SkillFS."""
+"""Workspace management for SkillFS."""
 
-from skillfs.agents.agent import Agent
-from skillfs.agents.persistence import (
+from skillfs.workspaces.workspace import Workspace
+from skillfs.workspaces.persistence import (
     BUNDLE_PATH_TEMPLATE,
     load_agent_state,
     save_agent_state,
 )
 
 __all__ = [
-    "Agent",
+    "Workspace",
     "load_agent_state",
     "save_agent_state",
     "BUNDLE_PATH_TEMPLATE",

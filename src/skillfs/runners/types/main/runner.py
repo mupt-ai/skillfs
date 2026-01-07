@@ -167,6 +167,20 @@ class MainRunner:
     def name(self) -> str:
         return self.runner_name
 
+    def add_tool(self, tool: tuple[Dict[str, Any], Callable]) -> None:
+        """Add a tool to this runner.
+
+        Args:
+            tool: Tuple of (schema, handler) from a tool provider.
+
+        Example:
+            >>> commit_tool = workspace.get_commit_tool()
+            >>> runner.add_tool(commit_tool)
+        """
+        schema, handler = tool
+        self.tools.append(schema)
+        self.handlers[schema["name"]] = handler
+
     async def run(self, task: str) -> AgentResult:
         """Run the agent with the given task.
 

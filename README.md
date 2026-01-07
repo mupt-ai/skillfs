@@ -1,15 +1,16 @@
 # SkillFS
 
-Persistent AI agent runtime with Git-based state management and isolated sandbox execution.
+Bash is all you need.
 
-## Overview
+A persistent, version-controlled sandbox for AI agents. Runs on [E2B](https://e2b.dev) with every change tracked in git.
 
-SkillFS provides infrastructure for building AI agents that:
-
-- **Persist across sessions** - Agent state is stored as Git bundles in cloud storage
-- **Run in isolated sandboxes** - Execute code safely in E2B containers
-- **Compose via runners** - Build agents from configurable templates with tool delegation
-- **Bridge MCP to sandboxes** - Convert MCP servers to Python scripts with SKILL.md for sandbox use
+```
+Agent works → commits progress → session ends
+            ↓
+Next session → restores state → continues where it left off
+            ↓
+git log     → full history of everything it did
+```
 
 
 ## Installation
@@ -19,109 +20,107 @@ pip install skillfs
 ```
 
 You'll also need:
-- An [E2B](https://e2b.dev) API key for sandbox execution (the default template has `uv` preinstalled)
-- An LLM API key (e.g., Anthropic) for agent reasoning
+- An [E2B](https://e2b.dev) API key for sandbox execution
+- An LLM API key (e.g., Anthropic) if using runners
 
 ## Quick Start
 
 ```python
 import asyncio
+from skillfs.workspaces import Workspace
 from skillfs.sandboxes import E2BSandbox, SandboxConfig
-from skillfs.runners import AnthropicProvider, MainRunner, SearchRunner
+from skillfs.storage import LocalBundleStore
 
 async def main():
-    # Create sandbox
     sandbox = E2BSandbox.create(config=SandboxConfig(timeout=300))
+    store = LocalBundleStore(directory="/tmp/workspaces")
 
-    # Create LLM provider
-    provider = AnthropicProvider(api_key="sk-ant-...", model="claude-sonnet-4-5-20250929")
-
-    # Create a runner with tools and subrunners
-    runner = MainRunner(
-        name="assistant",
-        description="General assistant",
-        system_prompt="You are a helpful coding assistant.",
+    workspace = Workspace(
+        workspace_id="my-workspace",
         sandbox=sandbox,
-        provider=provider,
-        tools=["glob", "grep", "read_file", "write_file"],
-        subrunners={"search": SearchRunner},
+        store=store,
     )
 
-    result = await runner.run("Find all Python files that handle authentication")
-    print(result.message)
+    await workspace.load()  # Restore from previous session if exists
 
+    # Use the sandbox directly
+    sandbox.run_command("echo 'Hello, world!' > hello.txt")
+    sandbox.run_command("cat hello.txt")
+
+    workspace.save()  # Commit and upload git bundle
     sandbox.close()
 
 asyncio.run(main())
 ```
 
-## Runners
+## Workspace
 
-Runners are provider-agnostic agent loops. `MainRunner` is a configurable template; specialized runners like `SearchRunner` extend it with fixed configurations.
-
-### MainRunner
-
-Configure tools, system prompt, and subrunners at instantiation:
+Workspace handles persistence. It manages:
+- Loading state from storage (git bundles)
+- Saving state back to storage
+- Setting up MCP servers
+- Managing skills
 
 ```python
-from skillfs.runners import MainRunner, SearchRunner
+from skillfs.workspaces import Workspace
 
+workspace = Workspace(
+    workspace_id="my-workspace",
+    sandbox=sandbox,
+    store=store,
+    mcp_servers={
+        "playwright": {"command": "npx", "args": ["@playwright/mcp@latest"]}
+    },
+    generate_mcp_tools=True,
+)
+
+await workspace.load()
+# ... do work with sandbox ...
+workspace.save()
+```
+
+### Storage Backends
+
+```python
+# Local filesystem (development)
+from skillfs.storage import LocalBundleStore
+store = LocalBundleStore(directory="/tmp/workspaces")
+
+# Google Cloud Storage (production)
+from skillfs.storage import GCSBundleStore
+store = GCSBundleStore(bucket="my-bucket", prefix="workspaces/")
+```
+
+## Runners (Optional)
+
+Runners are LLM loops that work with the sandbox. Workspace handles persistence, Runner handles agent logic.
+
+```python
+from skillfs.workspaces import Workspace
+from skillfs.runners import AnthropicProvider, MainRunner
+
+# Workspace: persistence
+workspace = Workspace(workspace_id="my-workspace", sandbox=sandbox, store=store)
+await workspace.load()
+
+# Runner: LLM loop (uses same sandbox)
+provider = AnthropicProvider(api_key="sk-ant-...", model="claude-sonnet-4-5-20250929")
 runner = MainRunner(
-    name="orchestrator",
-    description="Main agent that delegates tasks",
-    system_prompt="You coordinate tasks between specialists...",
+    name="assistant",
+    description="General assistant",
+    system_prompt="You are a helpful assistant.",
     sandbox=sandbox,
     provider=provider,
-    tools=["glob", "grep", "read_file", "write_file", "edit_file", "run_command"],
-    subrunners={
-        "search": SearchRunner,
-        # Use a different provider for a subrunner:
-        "fast_search": {"class": SearchRunner, "provider": haiku_provider},
-    },
+    tools=["glob", "grep", "read_file", "write_file"],
 )
+
+result = await runner.run("Find all Python files")
+print(result.message)
+
+workspace.save()
 ```
 
-### SearchRunner
-
-A specialized runner for codebase search with structured output:
-
-```python
-from skillfs.runners import SearchRunner
-
-search = SearchRunner(sandbox=sandbox, provider=provider)
-result = await search.run("Find error handling code")
-
-# result.data contains typed SearchResult with matches
-for match in result.data.matches:
-    print(f"{match.path}: {match.relevance}")
-```
-
-### Creating Custom Runners
-
-Extend `MainRunner` with fixed configuration and custom result parsing:
-
-```python
-class MyRunner(MainRunner):
-    name = "my_runner"
-    description = "Does something specific"
-
-    def __init__(self, sandbox, provider, max_turns=20):
-        super().__init__(
-            name=self.name,
-            description=self.description,
-            system_prompt="Your instructions here...",
-            sandbox=sandbox,
-            provider=provider,
-            tools=["glob", "read_file"],
-            output_schema=MY_OUTPUT_SCHEMA,  # For structured output
-        )
-
-    async def run(self, task: str) -> AgentResult:
-        result = await super().run(task)
-        return self._parse_result(result)  # Custom parsing
-```
-
-## Tools
+### Tools
 
 Built-in sandbox tools available to runners:
 
@@ -131,84 +130,14 @@ Built-in sandbox tools available to runners:
 - `write_file`: Create/overwrite files
 - `edit_file`: Make targeted string replacements
 - `run_command`: Execute shell commands
-- `git_commit`: Commit changes and save state to persistent storage
 
-Dynamic tools (auto-created when configured):
-- `call_subrunner` - Delegate to specialist agents
-- `load_skill` - Load skill instructions on-demand
+## MCP Integration
 
-### Git Commit Tool
-
-The `git_commit` tool enables agents to checkpoint their work by committing changes to the Git repository and persisting state to the bundle store.
-
-Enable it when creating an Agent:
+Generate Python wrappers for MCP servers inside the sandbox:
 
 ```python
-agent = Agent(
-    agent_id="my-agent",
-    sandbox=sandbox,
-    store=store,
-    provider=provider,
-    runner=MainRunner,
-    runner_config={
-        "name": "assistant",
-        "description": "Assistant with git checkpointing",
-        "system_prompt": "You are a helpful assistant...",
-        "tools": ["glob", "read_file", "write_file"],
-    },
-    enable_git_commit=True,  # Injects git_commit tool into the runner
-)
-```
-
-When called, the tool:
-1. Shows current diff and status
-2. Stages all changes (`git add -A`)
-3. Creates a commit with an auto-generated message (or custom if provided)
-4. Creates a Git bundle and uploads it to storage
-
-Commit messages follow conventional commit format (`feat:`, `fix:`, `refactor:`, `docs:`, `chore:`).
-
-## Agents & Persistence
-
-For long-running agents that need state persistence:
-
-```python
-from skillfs.agents import Agent
-from skillfs.storage import LocalBundleStore
-
-store = LocalBundleStore(directory="/tmp/agents")
-
-agent = Agent(
-    agent_id="my-agent",
-    sandbox=sandbox,
-    store=store,
-)
-await agent.load()   # Restore from storage if exists
-
-# ... agent does work ...
-
-agent.save()         # Commit and upload Git bundle
-```
-
-### Storage Backends
-
-```python
-# Local filesystem (development)
-from skillfs.storage import LocalBundleStore
-store = LocalBundleStore(directory="/tmp/agents")
-
-# Google Cloud Storage (production)
-from skillfs.storage import GCSBundleStore
-store = GCSBundleStore(bucket="my-bucket", prefix="agents/")
-```
-
-## Skill-based MCP Integration
-
-Generate Python wrappers and SKILL.md for MCP servers to use inside sandboxes:
-
-```python
-agent = Agent(
-    agent_id="browser-agent",
+workspace = Workspace(
+    workspace_id="browser-workspace",
     sandbox=sandbox,
     store=store,
     mcp_servers={
@@ -219,12 +148,22 @@ agent = Agent(
     },
     generate_mcp_tools=True,
 )
-await agent.load()
+await workspace.load()
+
+# MCP tools are now available at src/servers/playwright/
 ```
 
 ## Examples
 
-See `examples/` for complete working examples.
+**[`examples/browser_agent.py`](examples/browser_agent.py)** - Browser automation with Playwright MCP.
+
+**[`examples/example_with_runners.py`](examples/example_with_runners.py)** - Using Workspace with Runners.
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+export E2B_API_KEY=e2b_...
+python examples/browser_agent.py
+```
 
 ## License
 

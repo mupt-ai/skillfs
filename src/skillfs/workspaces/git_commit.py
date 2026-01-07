@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, Optional
 from skillfs.repositories.git_repo import GitRepo
 from skillfs.sandboxes.base import SandboxConnection
 from skillfs.storage.base import BundleStore
-from skillfs.agents.persistence import BUNDLE_PATH_TEMPLATE
+from skillfs.workspaces.persistence import BUNDLE_PATH_TEMPLATE
 
 import logging
 

@@ -7,6 +7,7 @@ using the Anthropic API (Claude models).
 import asyncio
 import json
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 import anthropic
@@ -102,12 +103,14 @@ class AnthropicAgentRunner(AgentRunner):
 
         turns_used = 0
         tools_called: List[str] = []
+        timing_stats: Dict[str, List[float]] = {"llm_calls": [], "tool_calls": {}}
 
         for turn in range(self.max_turns):
             turns_used = turn + 1
 
             try:
                 # Run sync client in thread pool to avoid blocking event loop
+                llm_start = time.time()
                 if self.output_schema:
                     # Use beta endpoint for structured outputs
                     response = await asyncio.to_thread(
@@ -142,6 +145,10 @@ class AnthropicAgentRunner(AgentRunner):
                     messages=messages,
                 )
 
+            llm_time = time.time() - llm_start
+            timing_stats["llm_calls"].append(llm_time)
+            print(f"[TIMING] Turn {turn + 1} LLM call: {llm_time:.2f}s")
+
             # Check if we're done (no more tool calls)
             if response.stop_reason != "tool_use":
                 return self._extract_final_result(
@@ -166,6 +173,7 @@ class AnthropicAgentRunner(AgentRunner):
                     logger.debug(f"Turn {turn}: calling tool {tool_name}")
 
                     # Execute the tool handler
+                    tool_start = time.time()
                     is_error = False
                     try:
                         handler = self.tool_handlers.get(tool_name)
@@ -182,6 +190,12 @@ class AnthropicAgentRunner(AgentRunner):
                         logger.error(f"Tool {tool_name} failed: {e}")
                         result = str(e)
                         is_error = True
+
+                    tool_time = time.time() - tool_start
+                    if tool_name not in timing_stats["tool_calls"]:
+                        timing_stats["tool_calls"][tool_name] = []
+                    timing_stats["tool_calls"][tool_name].append(tool_time)
+                    print(f"[TIMING] Tool {tool_name}: {tool_time:.2f}s")
 
                     # Collect tool result with is_error flag per Anthropic API spec
                     tool_result_block: Dict[str, Any] = {
